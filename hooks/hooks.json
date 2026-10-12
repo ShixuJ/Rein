@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/hooks/inject-hot-block.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

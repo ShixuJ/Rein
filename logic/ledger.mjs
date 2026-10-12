@@ -1,0 +1,116 @@
+// ALIGNMENT.md 的序列化与反序列化。格式稳定优先于好看：round-trip 必须字节一致。
+
+import { isActive } from "./item.mjs";
+
+const HEADING = /^### (C-\d+) · (\S+) · (\d{4}-\d{2}-\d{2})$/;
+
+const FIELDS = [
+  ["断言：", "statement"],
+  ["来源：", "source"],
+  ["状态：", "status"]
+];
+
+function renderItem(item) {
+  return [
+    `### ${item.id} · ${item.type} · ${item.date}`,
+    `断言：${item.statement}`,
+    `来源：${item.source}`,
+    `状态：${item.status}`
+  ];
+}
+
+export function serializeLedger(items) {
+  const active = items.filter(isActive);
+  const retired = items.filter((item) => !isActive(item));
+
+  const lines = [
+    "# ALIGNMENT",
+    "",
+    "当前生效的已确认项。由 rein 维护；失效条目保留在下方以便追溯。",
+    "",
+    "## 生效中",
+    ""
+  ];
+
+  if (active.length === 0) lines.push("_（暂无）_", "");
+  for (const item of active) lines.push(...renderItem(item), "");
+
+  lines.push("## 已失效", "");
+
+  if (retired.length === 0) lines.push("_（暂无）_", "");
+  for (const item of retired) lines.push(...renderItem(item), "");
+
+  return lines.join("\n");
+}
+
+/**
+ * 归档文件（`ALIGNMENT-ARCHIVE.md`）：装**已经失效**的条目。
+ *
+ * 与账本同一套条目格式，`parseLedger` 能直接读——归档只是"换个地方放"，不是删除。
+ * 账本正文与面板因此不长草，而历史一条不少。
+ */
+export function serializeArchive(items) {
+  // 按编号排：归档是一份时间线，编号就是创建的先后。
+  // 账本那边不动——它的失效区顺序保持写入时的样子。
+  const ordered = orderById(items);
+
+  const lines = [
+    "# ALIGNMENT-ARCHIVE",
+    "",
+    "已经失效的已确认项（取代过的、退休的）。由 rein 维护，勿手改。",
+    "条目永不删除——它们从 `ALIGNMENT.md` 挪到这里，只是不再参与每轮注入。",
+    "要查「我们曾以为是 X、后来改成 Y」那段历史时看这个文件。",
+    "",
+    "## 已失效",
+    ""
+  ];
+
+  if (ordered.length === 0) lines.push("_（暂无）_", "");
+  for (const item of ordered) lines.push(...renderItem(item), "");
+
+  return lines.join("\n");
+}
+
+function idNumber(id) {
+  const match = /^C-(\d+)$/.exec(String(id ?? ""));
+  return match ? Number(match[1]) : 0;
+}
+
+/** 按编号排序（编号就是创建的先后）。归档文件与"归档了哪几条"的回报都用它。 */
+export function orderById(items) {
+  return [...items].sort((a, b) => idNumber(a.id) - idNumber(b.id));
+}
+
+export function parseLedger(text) {
+  const items = [];
+  let current = null;
+
+  for (const rawLine of String(text ?? "").split("\n")) {
+    const line = rawLine.trimEnd();
+    const heading = HEADING.exec(line);
+
+    if (heading) {
+      current = {
+        id: heading[1],
+        type: heading[2],
+        date: heading[3],
+        statement: "",
+        source: "",
+        status: "active"
+      };
+      items.push(current);
+      continue;
+    }
+
+    if (!current) continue;
+
+    for (const [prefix, field] of FIELDS) {
+      if (line.startsWith(prefix)) {
+        current[field] = line.slice(prefix.length);
+        break;
+      }
+    }
+  }
+
+  return items;
+}

@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "rein": {
+      "command": "/bin/sh",
+      "args": [
+        "./scripts/run-node.sh",
+        "./mcp/server.mjs"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "HOME",
+        "PATH"
+      ],
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 600,
+      "default_tools_approval_mode": "prompt"
+    }
+  }
+}

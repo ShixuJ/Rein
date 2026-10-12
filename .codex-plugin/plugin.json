@@ -1,0 +1,24 @@
+{
+  "name": "rein",
+  "version": "0.1.0",
+  "description": "Interrogate an answer in an isolated side chat, then land the confirmed items so later turns stay aligned.",
+  "author": {
+    "name": "page"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Rein",
+    "shortDescription": "Keep the agent aligned with what you confirmed",
+    "longDescription": "Ask about an answer without derailing the main thread. Confirmed assertions go into ALIGNMENT.md and are re-read by a hook on every prompt, so later turns carry them without you repeating yourself; one-off notes can be carried back to the main thread exactly once instead.",
+    "developerName": "page",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Open the alignment ledger panel for the last answer"
+    ]
+  }
+}
