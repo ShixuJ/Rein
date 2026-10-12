@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" alt="Rein" width="128" height="128">
+</p>
+
 # rein
 
 一个 Codex 插件：把「质疑、收紧 Agent 的回答」这件事从主线程搬到隔离的**侧聊**里做，
