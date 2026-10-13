@@ -23,7 +23,7 @@ export function selectHotBlock(items, { maxItems = DEFAULT_MAX_ITEMS } = {}) {
   const active = items.filter(isActive);
   const limit = Number(maxItems);
   // 上限读不成数字时**全给**，不静默丢掉任何一条。
-  const shown = Number.isFinite(limit) && limit >= 0 ? active.slice(0, limit) : active;
+  const shown = Number.isFinite(limit) && limit >= 0 ? active.slice(-limit) : active;
   return { shown, total: active.length, dropped: active.length - shown.length };
 }
 

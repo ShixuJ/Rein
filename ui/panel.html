@@ -33,6 +33,7 @@
         --danger-ink: #ffffff;
         --danger-hover: #9e2618;
         --danger-soft: rgba(180, 45, 31, 0.10);
+        --danger-tint: rgba(180, 45, 31, 0.20);
         --danger-line: rgba(180, 45, 31, 0.42);
 
         --t-title: 14px;
@@ -58,6 +59,7 @@
           --danger-ink: #2a1512;
           --danger-hover: #ffb3aa;
           --danger-soft: rgba(255, 154, 143, 0.14);
+          --danger-tint: rgba(255, 154, 143, 0.26);
           --danger-line: rgba(255, 154, 143, 0.40);
         }
       }
@@ -181,6 +183,20 @@
 
       .statement { margin: 0; overflow-wrap: anywhere; }
 
+      /* 原文：这条结论当初从哪来。左侧一道竖线当引用，别做成又一张卡片——它挂在条目下面。 */
+      .origin {
+        margin: 8px 0 0;
+        padding: 8px 10px;
+        border-left: 3px solid var(--line-strong);
+        background: var(--fill);
+        border-radius: 0 var(--r-ctl) var(--r-ctl) 0;
+        font-size: var(--t-small);
+        line-height: 1.5;
+        opacity: 0.9;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
       .actions { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
       button {
         font-family: inherit;
@@ -215,15 +231,16 @@
         font-weight: 600;
       }
       button.edit:hover:not(:disabled) { background: var(--accent-tint); }
-      /* 「退休」平时只是灰按钮：不可逆的动作不该比常用的「修改」更抢眼，
-         红色留给真按下去那一步（.armed）和悬停——那时候它才是要人命的那颗。 */
-      button.danger { opacity: 0.72; }
-      button.danger:hover:not(:disabled) {
-        opacity: 1;
+      /* 「退休」常驻一层浅红（底色 + 描边 + 字色）：不可逆的动作要一眼认得出，不能靠悬停才现形。
+         但它始终是"浅"的——深红实心留给真按下去那一步（.armed 的「确认退休」），
+         不然每张卡片上会站着一颗比「修改」更抢眼的红按钮，重点反而没了。 */
+      button.danger {
         color: var(--danger);
         border-color: var(--danger-line);
         background: var(--danger-soft);
       }
+      /* 悬停只加深一档底色——和「修改」那颗一个节奏（soft → tint），别再加别的变化。 */
+      button.danger:hover:not(:disabled) { background: var(--danger-tint); }
       button.danger.armed {
         opacity: 1;
         border-color: transparent;
@@ -237,6 +254,9 @@
       button:disabled,
       button.danger.armed:disabled { opacity: 0.45; cursor: default; }
       button.tiny { font-size: var(--t-micro); padding: 3px 10px; border-radius: var(--r-pill); }
+      /* 「原文」推到这一行的最右边：它只读不写，跟「修改 / 退休」不是一类动作——隔开一个身位，
+         顺手点「退休」的时候不容易误碰它。 */
+      button.end { margin-left: auto; }
       #expand, #refresh { flex: none; }
       /* 加一条用加号，不用文字：它坐在自己那份列表的标题行上。悬停给文字、读屏器读 aria-label——
          图标按钮不能没有名字。 */
@@ -514,6 +534,10 @@
         let writing = false;
         let writingText = "";
         let writingType = "";
+        // 「原文」：读回来的正文按编号缓存，以及哪些条目的原文展开着。
+        // 账本状态里**不带**这些——状态是给模型看的，原文是给用户看的，点开才去问。
+        const evidenceText = new Map();
+        const evidenceOpen = new Set();
         // 正在等"确认退休"的那条编号。null = 没有在等。
         let confirming = null;
         let displayMode = "inline";
@@ -670,7 +694,22 @@
 
           actions.append(edit, retire);
 
-          card.append(meta, statement, actions);
+          // 原文：这条结论当初从哪来的。每条都给入口——没有原文的（手写的、更早落的）点开会
+          // 说明它是"外部写入"，而不是留一块空白。
+          const origin = button(evidenceOpen.has(item.id) ? "收起原文" : "原文", () => {
+            toggleEvidence(item.id);
+          }, !hostReady);
+          origin.className = "tiny end";
+          actions.append(origin);
+
+          card.append(meta, statement);
+          if (evidenceOpen.has(item.id) && evidenceText.has(item.id)) {
+            const origin = document.createElement("p");
+            origin.className = "origin";
+            origin.textContent = evidenceText.get(item.id);
+            card.append(origin);
+          }
+          card.append(actions);
           return card;
         }
 
@@ -735,8 +774,8 @@
         }
 
         function render() {
-          const active = state.items.filter(isActive);
-          const inactive = state.items.filter((item) => !isActive(item));
+          const active = state.items.filter(isActive).reverse();
+          const inactive = state.items.filter((item) => !isActive(item)).reverse();
 
           activeEl.textContent = "";
           inactiveEl.textContent = "";
@@ -852,6 +891,9 @@
           if (!payload) return;
           if (payload.root) state.root = payload.root;
           if (Array.isArray(payload.items)) state.items = payload.items;
+          // 账本一变，原文的展开与缓存就作废（取代之后编号都换了）。
+          evidenceText.clear();
+          evidenceOpen.clear();
           if (Array.isArray(payload.types)) state.types = payload.types;
           if (payload.hotBlock) showHotBlockNote(payload.hotBlock);
           if (payload.archived) renderArchiveNote(payload.archived);
@@ -869,6 +911,39 @@
             firstState = null;
             arrived(true);
           }
+        }
+
+        /**
+         * 「原文」：这条结论当初是从哪来的。
+         *
+         * 原文只存在本地、账本里没有，所以点开才现读——不塞进每次状态里，账本再大也不拖。
+         * 没有原文时服务端会回一句「外部写入」的说明，照原样显示；只有真的读失败才收回去。
+         */
+        async function toggleEvidence(id) {
+          if (evidenceOpen.has(id)) {
+            evidenceOpen.delete(id);
+            render();
+            return;
+          }
+          evidenceOpen.add(id);
+
+          if (!evidenceText.has(id)) {
+            setResult("正在读原文…");
+            const response = await request("tools/call", {
+              name: "rein_evidence",
+              arguments: { id, root: state.root }
+            });
+            const text = response?.result?.structuredContent?.text ?? null;
+            if (response?.error || !text) {
+              evidenceOpen.delete(id);
+              setResult(`失败：${response?.error?.message ?? "没拿到原文。"}`, true);
+              render();
+              return;
+            }
+            evidenceText.set(id, text);
+            setResult("");
+          }
+          render();
         }
 
         async function call(name, args) {
@@ -1145,7 +1220,8 @@
 
           const response = await withTimeout(
             request("ui/initialize", {
-              appInfo: { name: "rein-panel", version: "0.1.0" },
+              // 版本号是占位符：server 把这份面板递出去时会换成插件清单里的真版本号。
+              appInfo: { name: "rein-panel", version: "__REIN_VERSION__" },
               appCapabilities: {},
               protocolVersion: "2025-11-21"
             }),

@@ -4,11 +4,13 @@
 // 工具面很薄，逻辑全在 logic/。这个文件只做三件事：把工具暴露给模型、把面板资源递给宿主、
 // 把结果翻译成人话。任何"对齐"的判断都不该写在这里。
 
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 import { listTypes } from "../logic/config.mjs";
 import { DESTINATIONS } from "../logic/destination.mjs";
+import { renderEvidence } from "../logic/evidence.mjs";
 import { buildLandingForm, readLandingAnswers } from "../logic/landing-form.mjs";
 import {
   addRestatements,
@@ -17,6 +19,7 @@ import {
   countArchived,
   markPanelOpen,
   readConfig,
+  readEvidence,
   readItems,
   readSessionMarker,
   retireAll,
@@ -27,10 +30,27 @@ import {
 import { isActive } from "../logic/item.mjs";
 import { DEFAULT_MAX_ITEMS, selectHotBlock } from "../logic/hot-block.mjs";
 import { hookFreshness, humanAgo } from "../logic/hook-status.mjs";
+import { injectVersion } from "../logic/version.mjs";
 
 const APP_MIME = "text/html;profile=mcp-app";
 
 const PANEL_URI = "ui://rein/panel.html";
+
+// 版本号只有一个真源：插件清单。**运行时读**，代码里不写死——清单说了算（装到哪个目录、
+// 要不要重装都看它），代码里再抄一份只会带来"看着是新的、跑的其实是旧副本"。
+// 读不到就报 0.0.0：版本号不值得让 server 起不来。面板里的占位符也用它替换。
+const MANIFEST_URL = new URL("../.codex-plugin/plugin.json", import.meta.url);
+const SERVER_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(MANIFEST_URL, "utf8")).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
+
+// 没有原文时讲的那句：手写进账本的条目、以及这个功能之前落的条目，都会看到它。
+// 文案只有这一份——面板与 CLI 拿到的是同一句，别在两边各写一遍。
+const NO_EVIDENCE_NOTE = "（外部写入：不是从对话里写入的——手账本，或这个功能之前已经落成的条目。）";
 
 // 落地之后怎么回报用户：**只说结果，一句话**。模型容易照着工具结果的形状回报——
 // 文件名、session id、字段名都是内部细节，用户要知道的只是"去哪了"。
@@ -105,7 +125,7 @@ const TOOLS = [
     name: "rein_land",
     title: "落地（原生表单）",
     description:
-      "把候选断言交给用户，用宿主原生的 elicitation 表单逐条选去哪：「Align」写进 ALIGNMENT.md 以后每轮带上、「Restate」只带回主线说一次、「Ignore」不留痕。表单是**一问一页**的向导，每条候选就是那一页的问题（问题文字就是你写的 statement），下面三个选项。表单默认停在你在每条候选上给的 destination 建议上；用户整张表单都不想决定时按 skip，账本不动。主线程和侧聊都能用——在侧聊里用它，就是把结论搬回主线的正路。root 省略时用插件进程的工作目录，主 Agent 应当把当前工作区的绝对路径传进来。",
+      "把候选断言交给用户，用宿主原生的 elicitation 表单逐条选去哪：「Align」写进 ALIGNMENT.md 以后每轮带上、「Restate」只带回主线说一次、「Ignore」不留痕。表单是**一问一页**的向导，每条候选就是那一页的问题（问题文字就是你写的 statement），下面三个选项。表单默认停在你在每条候选上给的 destination 建议上；用户整张表单都不想决定时按 skip，账本不动。主线程和侧聊都能用——在侧聊里用它，就是把结论搬回主线的正路。root 省略时用插件进程的工作目录，主 Agent 应当把当前工作区的绝对路径传进来。**顺手把原文也交出来**：`evidence` = 用户确认时那句话、`corrected` = 被纠正对象的一句引用（可选）——侧聊是临时的，错过落地这一刻，这条结论的来龙去脉以后就找不回来了。",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,7 +135,17 @@ const TOOLS = [
           items: CANDIDATE_SCHEMA
         },
         root: { type: "string", description: "项目根目录的绝对路径。" },
-        source: { type: "string", description: "这批断言来自哪里，写进账本条目的来源字段。" }
+        source: { type: "string", description: "这批断言来自哪里，写进账本条目的来源字段。" },
+        evidence: {
+          type: "string",
+          description:
+            "原文的第一句：**用户确认这条结论时说的那句话**，照抄，别总结、别改写。作用范围是一轮，整批共用。它只能由你交出来（侧聊没有落盘、事后没处可查），落地这一刻不交，这条结论以后就回溯不到来路了。写进本地一份，不进账本、不进项目。"
+        },
+        corrected: {
+          type: "string",
+          description:
+            "原文的第二句（可选）：**被纠正 / 被收紧的那个对象的一句引用**——通常是上一条回答里的那一句原话。用户「选中一句话加进聊天」的场合，引用的那句写在这里。这条结论没有在纠正谁（纯粹新增一个约束）就省略。"
+        }
       },
       required: ["candidates"],
       additionalProperties: false
@@ -211,6 +241,22 @@ const TOOLS = [
       required: ["id"],
       additionalProperties: false
     }
+  },
+  {
+    name: "rein_evidence",
+    title: "看一条结论的原文",
+    description:
+      "读回某条已确认项落地时留下的原文：用户确认的那句 + 被纠正对象的一句引用（取代过的还会附上「原结论」）。用于用户问「这条当初是因为什么才落的」。**只在用户明确要看时才调它**——原文不进账本、也不会自动出现在你的上下文里。原文只存在本地，账本文件（ALIGNMENT.md）里没有它；没留过原文的条目会明说没有。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "要看的已确认项编号，例如 C-013。" },
+        root: { type: "string", description: "项目根目录的绝对路径。" }
+      },
+      required: ["id"],
+      additionalProperties: false
+    },
+    _meta: { ui: { visibility: ["model", "app"] } }
   }
 ];
 
@@ -295,6 +341,8 @@ async function ledgerState(root) {
 
   return {
     root,
+    // 这里**不带**任何原文信息：账本状态是给模型看的，原文是给用户看的，
+    // 面板要用时自己点开去 rein_evidence 取——模型不会因此背上原文。
     items,
     types: listTypes(config),
     active,
@@ -354,7 +402,9 @@ async function callTool(name, params) {
 
       const { created } = await commitItems(root, [{ statement, type: params?.type }], {
         date: localDate(),
-        source: "账本面板 · 直接写"
+        source: "账本面板 · 直接写",
+        // 这条不是从对话里来的——原文位置注明它是用户本人写的，别留一个说不清的空档。
+        evidence: "用户本人在账本面板直接写入（没有对话原文）。"
       });
       const state = await ledgerState(root);
       const message = `已写入 ${created[0]?.id ?? ""}——从下一轮起每轮带上。`;
@@ -368,7 +418,7 @@ async function callTool(name, params) {
     case "rein_list": {
       const state = await ledgerState(resolveRoot(params));
       const body = state.items.length
-        ? `${describeLedger(state)}\n${state.items
+        ? `${describeLedger(state)}\n${[...state.items].reverse()
             .map((item) => `${item.id} · ${item.type} · ${item.status}：${item.statement}`)
             .join("\n")}`
         : "账本还是空的。";
@@ -471,6 +521,25 @@ async function callTool(name, params) {
       };
     }
 
+    case "rein_evidence": {
+      const root = resolveRoot(params);
+      const id = String(params?.id ?? "").trim();
+
+      if (!id) {
+        throw Object.assign(new Error("要看哪一条？id 不能为空（例如 C-013）"), { code: -32602 });
+      }
+
+      const text = await readEvidence(root, id);
+      // 没有原文不是错误，是"这条不是从对话里落的"。照样回一句说明，别给一块空白——
+      // 面板与 CLI 讲同一句话，真假由 hasEvidence 区分。
+      const shown = text ?? NO_EVIDENCE_NOTE;
+
+      return {
+        content: [{ type: "text", text: `${id} 的原文：\n\n${shown}` }],
+        structuredContent: { id, text: shown, hasEvidence: Boolean(text) }
+      };
+    }
+
     case "rein_land": {
       const root = resolveRoot(params);
       const candidates = Array.isArray(params?.candidates) ? params.candidates : [];
@@ -531,7 +600,10 @@ async function callTool(name, params) {
       if (chosen.length > 0) {
         ({ created, replaced, warnings } = await commitItems(root, chosen, {
           date: localDate(),
-          source: params?.source ?? localDate()
+          source: params?.source ?? localDate(),
+          // 原文只能在这一刻拿到（侧聊是临时的），整批共用一条——作用范围是一轮。
+          // 形状（用户确认的那句 + 被纠正对象的一句引用）在这里定，别指望模型自己排版。
+          evidence: renderEvidence({ user: params?.evidence, corrected: params?.corrected })
         }));
       }
 
@@ -607,7 +679,7 @@ async function handle(message) {
           tools: { listChanged: false },
           resources: { subscribe: false, listChanged: false }
         },
-        serverInfo: { name: "rein", version: "0.1.0" }
+        serverInfo: { name: "rein", version: SERVER_VERSION }
       });
       return;
 
@@ -645,8 +717,15 @@ async function handle(message) {
         return;
       }
       // 每次从磁盘读：宿主会缓存面板资源，但如果它来问，我们至少给最新的。
+      // 面板里的版本号是个占位符，在这里换成清单里的真版本——面板因此不用手写版本号。
       result(id, {
-        contents: [{ uri, mimeType: APP_MIME, text: await readFile(entry.file, "utf8") }]
+        contents: [
+          {
+            uri,
+            mimeType: APP_MIME,
+            text: injectVersion(await readFile(entry.file, "utf8"), SERVER_VERSION)
+          }
+        ]
       });
       return;
     }

@@ -12,8 +12,10 @@ import {
   archiveInactive,
   commitItems,
   countArchived,
+  localDir,
   markPanelOpen,
   PANEL_OPEN_TTL_MS,
+  readEvidence,
   readInbox,
   readItems,
   readSessionMarker,
@@ -37,10 +39,11 @@ async function scratchDir() {
   return mkdtemp(join(tmpdir(), "rein-store-"));
 }
 
-// 账本 / 归档 / 收件箱真正落在哪，由 stateDir 决定（默认是数据目录，项目里有账本才回项目）。
+// 账本 / 归档落在哪由 stateDir 决定（默认是数据目录，项目里有账本才回项目）；
+// 收件箱与原文永远在机器本地的 localDir 里，不进项目。
 const ledgerFile = (root) => join(stateDir(root), "ALIGNMENT.md");
 const archiveFile = (root) => join(stateDir(root), "ALIGNMENT-ARCHIVE.md");
-const inboxFile = (root) => join(stateDir(root), ".rein", "inbox.md");
+const inboxFile = (root) => join(localDir(root), ".rein", "inbox.md");
 
 const OLD_BLOCK = [
   "<!-- rein:begin -->",
@@ -207,7 +210,7 @@ test("侧聊问一句吃不掉收件箱——新开的侧聊也不行", async ()
   );
 });
 
-test("收件箱放在项目里：A 项目的复述 B 项目吃不到", async () => {
+test("收件箱按项目分开：A 项目的复述 B 项目吃不到", async () => {
   const a = await scratchDir();
   const b = await scratchDir();
   await addRestatements(a, ["甲项目的复述。"], { at: AT, session: "side-1" });
@@ -228,6 +231,19 @@ test("没有账本的项目也能写收件箱——目录按需长出来", async
     (await readInbox(root)).map((entry) => entry.text),
     ["甲。"]
   );
+});
+
+test("项目里放了账本，复述也不在项目里留下 .rein——收件箱是机器本地的", async () => {
+  const root = await scratchDir();
+  await writeFile(join(root, "ALIGNMENT.md"), "# ALIGNMENT\n", "utf8");
+
+  await addRestatements(root, ["把这段带回去。"], { at: AT, session: "side-1" });
+
+  // 账本回到项目里（可 diff、能进 PR），但收件箱没有：项目根不该凭空长出 .rein/
+  assert.equal(stateDir(root), root, "有账本时账本层回到项目");
+  assert.notEqual(localDir(root), root, "本地层永远不在项目里");
+  await assert.rejects(() => stat(join(root, ".rein")), { code: "ENOENT" });
+  assert.match(await readFile(inboxFile(root), "utf8"), /把这段带回去。/);
 });
 
 test("取代：新条目照落，旧条目标成 superseded by 新编号，历史留着", async () => {
@@ -576,4 +592,129 @@ test("取代一条已经归档的条目：新条目照落，警告说清它在�
   assert.deepEqual(created.map((item) => item.id), ["C-002"]);
   assert.match(warnings.join("\n"), /已经归档/);
   assert.equal((await readItems(root)).length, 1, "归档那条不该被拽回账本");
+});
+
+// --- 原文（结论从哪来）------------------------------------------------------
+
+const evidenceDir = (root) => join(localDir(root), "evidence");
+
+test("落地时带上原文：按编号存一份，读得回来", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(
+    root,
+    [{ statement: "渲染走服务端默认值。" }],
+    { date: DATE, evidence: "那这个渲染到底按谁的值来？" }
+  );
+
+  assert.equal(await readEvidence(root, created[0].id), "那这个渲染到底按谁的值来？");
+});
+
+test("没给原文就不留——连目录都不建", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "甲。" }], { date: DATE });
+
+  assert.equal(await readEvidence(root, created[0].id), null);
+  await assert.rejects(() => stat(evidenceDir(root)), { code: "ENOENT" });
+});
+
+test("取代：原文跟着新条目走，旧编号下不留（改措辞不改原文）", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "旧的写法。" }], {
+    date: DATE,
+    evidence: "原话。"
+  });
+  const first = created[0].id;
+
+  const { created: second } = await commitItems(
+    root,
+    [{ statement: "新的写法。", supersedes: first }],
+    { date: DATE }
+  );
+
+  assert.equal(
+    await readEvidence(root, second[0].id),
+    "原话。\n原结论 C-001：旧的写法。",
+    "原文跟过来，后面附上被取代的那句"
+  );
+  assert.equal(await readEvidence(root, first), null, "旧编号下那份挪走了，不留孤儿");
+});
+
+test("取代时没有新原文：接着写「原结论」，不把旧结论丢掉", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "旧的写法。" }], { date: DATE });
+
+  const { created: second } = await commitItems(
+    root,
+    [{ statement: "新的写法。", supersedes: created[0].id }],
+    { date: DATE }
+  );
+
+  assert.equal(await readEvidence(root, second[0].id), "原结论 C-001：旧的写法。");
+});
+
+test("连着取代两次：原结论按顺序累加，取代链在原文里也读得出来", async () => {
+  const root = await scratchDir();
+  await commitItems(root, [{ statement: "第一版。" }], { date: DATE });
+  await commitItems(root, [{ statement: "第二版。", supersedes: "C-001" }], { date: DATE });
+  await commitItems(root, [{ statement: "第三版。", supersedes: "C-002" }], { date: DATE });
+
+  assert.equal(
+    await readEvidence(root, "C-003"),
+    "原结论 C-001：第一版。\n原结论 C-002：第二版。"
+  );
+});
+
+test("取代时给了新原文：用新的", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "旧的写法。" }], {
+    date: DATE,
+    evidence: "老原话。"
+  });
+
+  const { created: second } = await commitItems(
+    root,
+    [{ statement: "新的写法。", supersedes: created[0].id }],
+    { date: DATE, evidence: "新原话。" }
+  );
+
+  assert.equal(await readEvidence(root, second[0].id), "新原话。\n原结论 C-001：旧的写法。", "用新原文，但旧结论照样附上");
+  assert.equal(await readEvidence(root, created[0].id), null);
+});
+
+test("面板里改措辞（取代）也把原文带过去", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "旧的措辞。" }], {
+    date: DATE,
+    evidence: "原话。"
+  });
+
+  const result = await reviseItem(root, { id: created[0].id, statement: "新的措辞。", date: DATE });
+
+  assert.equal(result.action, "superseded");
+  assert.equal(await readEvidence(root, result.item.id), "原话。\n原结论 C-001：旧的措辞。");
+  assert.equal(await readEvidence(root, created[0].id), null);
+});
+
+test("退休：原文一起退休", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "过时的那条。" }], {
+    date: DATE,
+    evidence: "原话。"
+  });
+
+  await retireItem(root, { id: created[0].id });
+
+  assert.equal(await readEvidence(root, created[0].id), null);
+});
+
+test("全部退休：原文一起清掉", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "甲。" }, { statement: "乙。" }], {
+    date: DATE,
+    evidence: "原话。"
+  });
+
+  await retireAll(root);
+
+  for (const item of created) assert.equal(await readEvidence(root, item.id), null);
 });

@@ -53,3 +53,15 @@ test("每个 skill 都是带 name 与 description 的 SKILL.md，且有正文", 
     assert.ok(parsed.body.trim().length > 0, `${name}/SKILL.md 只有 frontmatter`);
   }
 });
+
+test("清单声明的图标真的在——路径写错了不报错，只是静默没有图标", async () => {
+  const manifest = await readManifest();
+
+  for (const field of ["composerIcon", "logo"]) {
+    const path = manifest.interface?.[field];
+
+    assert.ok(path, `interface.${field} 没声明`);
+    assert.ok(path.startsWith("./"), `interface.${field} 得是 ./ 开头的插件根相对路径`);
+    assert.ok((await stat(join(REPO, path))).size > 0, `${path} 不在，或者是空文件`);
+  }
+});

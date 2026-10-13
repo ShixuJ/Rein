@@ -1,9 +1,9 @@
 {
   "name": "rein",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
-  "description": "Codex plugin: interrogate an answer in a side chat, then land the confirmed items so later turns stay aligned.",
+  "description": "Codex plugin: land the conclusions you confirm into a ledger that's re-read on every prompt, so later turns stay aligned.",
   "scripts": {
     "test": "node --test",
     "plugin:install": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex plugin add rein@rein-dev",

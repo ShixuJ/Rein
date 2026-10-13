@@ -1,8 +1,9 @@
 // 账本等状态文件的读写。宿主无关：只有文件系统，没有 MCP、没有 Codex。
 //
-// 状态落在哪里：默认**不写进你正在干活的项目**，而是写进插件自己的用户级数据目录
-// （$REIN_HOME，默认 ~/.codex/rein），按项目路径哈希分开存。只有当项目里**已经存在**
-// ALIGNMENT.md 时，才改用项目里那本——想要 diff / 能进 PR，就在项目里放一个账本。
+// 状态分成两层，按性质分（见下面的 localDir / stateDir）：
+// - **账本层**（账本、归档）：默认写进插件的数据目录（$REIN_HOME，默认 ~/.codex/rein）；
+//   项目里**已经存在** ALIGNMENT.md 时就改用项目里那本——想要 diff / 能进 PR 就 opt-in。
+// - **本地层**（收件箱、原文）：永远在 $REIN_HOME 下按项目路径哈希分开存，**从不进项目**。
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -11,6 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { defaultConfig, parseConfig, resolveType, suggestedType } from "./config.mjs";
+import { originalLine } from "./evidence.mjs";
 import { HOT_BLOCK_BEGIN, removeHotBlock } from "./hot-block.mjs";
 import { createEntry, deliverable, parseInbox, serializeInbox } from "./inbox.mjs";
 import {
@@ -29,6 +31,7 @@ export const ARCHIVE_FILENAME = "ALIGNMENT-ARCHIVE.md";
 export const AGENTS_FILENAME = "AGENTS.md";
 export const CONFIG_PATH = join(".rein", "config.toml");
 export const INBOX_PATH = join(".rein", "inbox.md");
+export const EVIDENCE_DIR = "evidence";
 
 async function readIfExists(file) {
   try {
@@ -53,17 +56,29 @@ function reinHome() {
 }
 
 /**
- * 状态文件（账本、归档、收件箱、配置）落在哪个目录。
+ * 机器本地的状态目录：`$REIN_HOME/projects/<项目哈希>/`。**永远不在用户项目里。**
+ *
+ * 收件箱与原文都落在这里——它们是**每台机器各一份、每轮在变、跟仓库无关**的派生状态：
+ * 收件箱是"侧聊→主线"的一次性投递，原文是本地回溯用的旁证。它们不该跟着账本一起
+ * opt-in 进项目（否则一次复述就在用户仓库里凭空长出 `.rein/`，`git status` 也脏了）。
+ */
+export function localDir(root) {
+  return join(reinHome(), "projects", sessionKey(normalizeRoot(root)));
+}
+
+/**
+ * **账本层**的状态文件（账本、归档）落在哪个目录。
  *
  * - 项目里已经有 `ALIGNMENT.md` → 用项目根：回归"项目层账本"，可 diff、能进 PR。
  * - 否则 → 插件的数据目录 `$REIN_HOME/projects/<项目哈希>/`，不碰你的工作区。
  *
  * 判据只看账本在不在：想 opt-in 到项目层，在项目里放一个 `ALIGNMENT.md` 就行（内容随意）。
+ * 收件箱与原文不走这里——它们永远是机器本地的（见 localDir）。
  */
 export function stateDir(root) {
   const base = normalizeRoot(root);
   if (existsSync(join(base, LEDGER_FILENAME))) return base;
-  return join(reinHome(), "projects", sessionKey(base));
+  return localDir(base);
 }
 
 export async function readConfig(root) {
@@ -97,13 +112,13 @@ async function readArchived(root) {
 // ---------------------------------------------------------------------------
 
 export async function readInbox(root) {
-  const text = await readIfExists(join(stateDir(root), INBOX_PATH));
+  const text = await readIfExists(join(localDir(root), INBOX_PATH));
   return text ? parseInbox(text) : [];
 }
 
 export async function writeInbox(root, entries) {
   const base = normalizeRoot(root);
-  const file = join(stateDir(base), INBOX_PATH);
+  const file = join(localDir(base), INBOX_PATH);
 
   // 空了就把文件摘掉，不留一个只有表头的空文件。读到"文件不在"仍是空收件箱。
   if (entries.length === 0) {
@@ -142,6 +157,61 @@ export async function takeRestatements(root, { session = "", isMain } = {}) {
   }
 
   return taken;
+}
+
+// ---------------------------------------------------------------------------
+// 原文：每条结论从哪来
+// ---------------------------------------------------------------------------
+
+// 账本会越长越大，退休某条时人容易犯迷糊——"这条当初是因为什么才落的？"。所以每条落地的
+// 结论留一份**原文**：它所依据的那一轮对话里用户的原话。
+//
+// 为什么必须在**落地那一刻**留：侧聊是临时的、没有 rollout 文件，一段在侧聊里谈成的结论，
+// 它的原文在侧聊关掉之后就查不到了。事后没有源可回溯，只能由模型在调 rein_land 时交出来。
+//
+// 只留机器本地（`$REIN_HOME/projects/<hash>/evidence/`），**不进账本、不进项目**：账本要能
+// 进 PR、要能跨机器，而原文是本地审计用的旁证。条目的编号就是指针——面板按编号现读现显。
+//
+// 生命周期跟着结论走：**取代 → 原文跟着新条目走**（"改措辞不改原文"）；**退休 → 一起退休**。
+
+function evidenceFile(root, id) {
+  return join(localDir(root), EVIDENCE_DIR, `${id}.md`);
+}
+
+/** 留一份原文。空文本等于没留——顺手把旧的那份摘掉。 */
+export async function writeEvidence(root, id, text) {
+  const value = String(text ?? "").trim();
+  if (!value) return deleteEvidence(root, id);
+
+  const file = evidenceFile(root, id);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, `${value}\n`, "utf8");
+}
+
+export async function readEvidence(root, id) {
+  const text = await readIfExists(evidenceFile(root, id));
+  return text && text.trim() ? text.trim() : null;
+}
+
+export async function deleteEvidence(root, id) {
+  await rm(evidenceFile(root, id), { force: true });
+}
+
+/** 往已有原文后面接一行。取代时用：前面几行说"从哪来"，这一行说"改之前是什么"。 */
+export async function appendEvidence(root, id, line) {
+  const value = String(line ?? "").trim();
+  if (!value) return;
+
+  const current = await readEvidence(root, id);
+  await writeEvidence(root, id, current ? `${current}\n${value}` : value);
+}
+
+/** 原文换一条结论挂：取代时把旧的那份挪到新编号下，旧的删掉，不留孤儿。 */
+async function moveEvidence(root, fromId, toId, { fallback = null } = {}) {
+  const carried = fallback ?? (await readEvidence(root, fromId));
+  if (!carried) return;
+  await writeEvidence(root, toId, carried);
+  await deleteEvidence(root, fromId);
 }
 
 // ---------------------------------------------------------------------------
@@ -225,8 +295,12 @@ export async function takePanelOpen(root, { now = Date.now() } = {}) {
  *
  * draft 上可以带 `supersedes: "C-0NN"`：这条新条目取代某条已有的。旧条目不删，
  * 状态改成 `superseded by <新 id>` 并移进"已失效"区，链留在文件里。
+ *
+ * options 上的 `evidence` 是**整批共用**的一段原文（作用范围是一轮，见上面"原文"一节）：
+ * 每条新条目都留一份；取代别人的那些，把旧条目的原文挪过来（新原文给了就用新的），
+ * 再把被取代的那句作为「原结论」附在后面。
  */
-export async function commitItems(root, drafts, { date, source = "" } = {}) {
+export async function commitItems(root, drafts, { date, source = "", evidence = "" } = {}) {
   const base = normalizeRoot(root);
   const config = await readConfig(base);
   const existing = await readItems(base);
@@ -281,6 +355,17 @@ export async function commitItems(root, drafts, { date, source = "" } = {}) {
   }
 
   await writeLedger(base, known);
+
+  // 原文：先给每条新条目落一份（整批共用），再把被取代的那些的原文挪过来，
+  // 最后把被取代的那句也附上——"改之前是什么"。
+  for (const item of created) {
+    if (evidence) await writeEvidence(base, item.id, evidence);
+  }
+  for (const { from, to } of replaced) {
+    await moveEvidence(base, from, to, { fallback: evidence || null });
+    const previous = existing.find((item) => item.id === from);
+    if (previous) await appendEvidence(base, to, originalLine(from, previous.statement));
+  }
 
   // AGENTS.md 永远是**项目**文件（不是状态文件），所以用 base 而不是 stateDir。
   const agentsPath = join(base, AGENTS_FILENAME);
@@ -365,6 +450,8 @@ export async function retireItem(root, { id } = {}) {
 
   const after = retire(items, id);
   await writeLedger(base, after);
+  // 退休一起退休：这条不再生效，它那份原文也没有留下的理由了。
+  await deleteEvidence(base, id);
   return { ok: true, action: "retired", item: after.find((item) => item.id === id), items: after, config };
 }
 
@@ -387,6 +474,7 @@ export async function retireAll(root) {
 
   const after = items.map((item) => (isActive(item) ? { ...item, status: "retired" } : item));
   await writeLedger(base, after);
+  for (const id of targets) await deleteEvidence(base, id);
 
   return { ok: true, action: "retired-all", retired: targets, items: after, config };
 }
@@ -422,6 +510,8 @@ export async function archiveInactive(root) {
 
   const kept = items.filter(isActive);
   await writeLedger(base, kept);
+  // 失效条目的原文本该在退休/取代时就清掉了；这里补一刀，免得改名换姓之后留下孤儿。
+  for (const id of movedIds) await deleteEvidence(base, id);
 
   return {
     ok: true,
