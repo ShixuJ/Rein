@@ -1,8 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEFAULT_CONFIG, listTypes, parseConfig, suggestedType } from "./config.mjs";
+import {
+  DEFAULT_CONFIG,
+  DEFAULT_TYPES,
+  listTypes,
+  parseConfig,
+  renderConfigTemplate,
+  suggestedType
+} from "./config.mjs";
 import { DEFAULT_MAX_ITEMS } from "./hot-block.mjs";
+
+test("配置模板：解析回来就是出厂默认值，注释里带着怎么加一类标签", () => {
+  const text = renderConfigTemplate();
+
+  assert.match(text, /hot_block_max_items = 20/);
+  assert.match(text, /\[types\.handoff\]/, "注释里要有加标签的样例，照着抄就行");
+
+  const parsed = parseConfig(text);
+  assert.equal(parsed.hot_block_max_items, DEFAULT_CONFIG.hot_block_max_items);
+  assert.deepEqual(
+    listTypes(parsed).map((type) => type.slug),
+    DEFAULT_TYPES.map((type) => type.slug),
+    "模板写出来的就是默认四类，顺序也一致"
+  );
+});
 
 const SAMPLE = `
 # 类型只是标签：增删类型只改这里。

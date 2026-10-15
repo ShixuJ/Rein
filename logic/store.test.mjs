@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { renderHotBlock } from "./hot-block.mjs";
+import { DEFAULT_MAX_ITEMS, renderHotBlock } from "./hot-block.mjs";
 import { isActive } from "./item.mjs";
 import { parseLedger } from "./ledger.mjs";
 import {
@@ -12,10 +13,12 @@ import {
   archiveInactive,
   commitItems,
   countArchived,
+  ensureScaffold,
   localDir,
   markPanelOpen,
   PANEL_OPEN_TTL_MS,
   readEvidence,
+  readConfig,
   readInbox,
   readItems,
   readSessionMarker,
@@ -717,4 +720,83 @@ test("全部退休：原文一起清掉", async () => {
   await retireAll(root);
 
   for (const item of created) assert.equal(await readEvidence(root, item.id), null);
+});
+
+// 配置该放哪，跟"账本在哪"是两件事。这一条盯着那个错：回退曾经走 stateDir，
+// 于是项目级账本的项目把 .rein 挪到数据目录之后，那份配置**整个被跳过**，
+// 表现就是"挪了不生效"。
+test("配置：项目里那份优先，项目里没有就读本地数据目录那份", async () => {
+  const root = await scratchDir();
+  const localConfig = join(localDir(root), ".rein", "config.toml");
+
+  // 两处都没有 → 出厂默认
+  assert.equal((await readConfig(root)).hot_block_max_items, DEFAULT_MAX_ITEMS);
+
+  await mkdir(join(localDir(root), ".rein"), { recursive: true });
+  await writeFile(localConfig, "hot_block_max_items = 33\n", "utf8");
+  assert.equal((await readConfig(root)).hot_block_max_items, 33, "本地那份要生效");
+
+  await mkdir(join(root, ".rein"), { recursive: true });
+  await writeFile(join(root, ".rein", "config.toml"), "hot_block_max_items = 11\n", "utf8");
+  assert.equal((await readConfig(root)).hot_block_max_items, 11, "项目里那份优先");
+});
+
+test("配置：账本在项目里时，本地那份照样生效", async () => {
+  const root = await scratchDir();
+  // 项目里有 ALIGNMENT.md = 这个项目用项目级账本，stateDir 会指向项目
+  await writeFile(join(root, "ALIGNMENT.md"), "# ALIGNMENT\n\n当前生效的已确认项。\n", "utf8");
+  await mkdir(join(localDir(root), ".rein"), { recursive: true });
+  await writeFile(join(localDir(root), ".rein", "config.toml"), "hot_block_max_items = 40\n", "utf8");
+
+  assert.equal((await readConfig(root)).hot_block_max_items, 40);
+});
+
+// 模板是"能找着"的关键：配置在哪、能改什么，全靠这两个文件里写着的注释。
+test("第一次用到 rein：数据目录里铺好空账本与配置模板，项目里一个字节不建", async () => {
+  const root = await scratchDir();
+  await ensureScaffold(root);
+
+  const ledger = await readFile(join(localDir(root), "ALIGNMENT.md"), "utf8");
+  assert.match(ledger, /^# ALIGNMENT/);
+  assert.match(ledger, /## 生效中/);
+  assert.equal((await readConfig(root)).hot_block_max_items, DEFAULT_MAX_ITEMS, "模板写的就是出厂默认值");
+
+  const template = await readFile(join(localDir(root), ".rein", "config.toml"), "utf8");
+  assert.match(template, /hot_block_max_items = 20/);
+  assert.match(template, /\[types\.handoff\]/, "注释里要有加标签的样例");
+
+  assert.ok(!existsSync(join(root, "ALIGNMENT.md")), "项目里不建账本");
+  assert.ok(!existsSync(join(root, ".rein")), "项目里不建配置");
+});
+
+test("铺过的就不再动：用户改过的值必须留住", async () => {
+  const root = await scratchDir();
+  await ensureScaffold(root);
+
+  const config = join(localDir(root), ".rein", "config.toml");
+  await writeFile(config, "hot_block_max_items = 7\n", "utf8");
+  await ensureScaffold(root);
+
+  assert.equal(await readFile(config, "utf8"), "hot_block_max_items = 7\n");
+  assert.equal((await readConfig(root)).hot_block_max_items, 7);
+});
+
+test("项目里已经有账本与配置：数据目录这边不另起影子文件", async () => {
+  const root = await scratchDir();
+  await writeFile(join(root, "ALIGNMENT.md"), "# ALIGNMENT\n", "utf8");
+  await mkdir(join(root, ".rein"), { recursive: true });
+  await writeFile(join(root, ".rein", "config.toml"), "hot_block_max_items = 5\n", "utf8");
+
+  await ensureScaffold(root);
+
+  assert.equal((await readConfig(root)).hot_block_max_items, 5);
+  assert.ok(!existsSync(join(localDir(root), "ALIGNMENT.md")), "项目里那本说了算");
+});
+
+test("认不出项目（空 root、相对路径）就别照着空哈希乱建目录", async () => {
+  await ensureScaffold("");
+  await ensureScaffold("relative/path");
+
+  assert.ok(!existsSync(join(localDir(""), "ALIGNMENT.md")));
+  assert.ok(!existsSync(join(localDir("relative/path"), "ALIGNMENT.md")));
 });

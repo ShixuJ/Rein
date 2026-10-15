@@ -17,6 +17,7 @@ import {
   addRestatements,
   archiveInactive,
   commitItems,
+  ensureScaffold,
   markPanelOpen,
   mostRecentProjectRoot,
   readConfig,
@@ -133,7 +134,7 @@ const TOOLS = [
         evidence: {
           type: "string",
           description:
-            "原文的第一句：**用户确认这条结论时说的那句话**，照抄，别总结、别改写。作用范围是一轮，整批共用。它只能由你交出来（侧聊没有落盘、事后没处可查），落地这一刻不交，这条结论以后就回溯不到来路了。写进本地一份，不进账本、不进项目。"
+            "原文的第一句：**用户确认这条结论时说的那句话**，照抄，别总结、别改写。作用范围是一轮，整批共用。它只能由你交出来（侧聊没有落盘、事后没处可查），落地这一刻不交，这条结论以后就回溯不到来路了——面板上点「原文」只会显示「外部写入」。这一项是**必填**：确实没有可引用的原话就交空串，但先想清楚——用户刚刚说的那句就是它。写进本地一份，不进账本、不进项目。"
         },
         corrected: {
           type: "string",
@@ -141,7 +142,9 @@ const TOOLS = [
             "原文的第二句（可选）：**被纠正 / 被收紧的那个对象的一句引用**——通常是上一条回答里的那一句原话。用户「选中一句话加进聊天」的场合，引用的那句写在这里。这条结论没有在纠正谁（纯粹新增一个约束）就省略。"
         }
       },
-      required: ["candidates"],
+      // evidence 必填是刻意的：它是可选的时候，模型会一忙就漏——漏掉的代价不在这次调用，
+      // 而是几个月后点「原文」只剩「外部写入」。把"必须给个交代"摆到 schema 这一层。
+      required: ["candidates", "evidence"],
       additionalProperties: false
     }
   },
@@ -376,6 +379,10 @@ function describeEdit(result, types = []) {
 }
 
 async function callTool(name, params) {
+  // 第一次用到 rein 就把数据目录里的两份模板铺好（空账本 + 带注释的配置）。
+  // 只写插件自家目录，绝不碰用户项目；铺不动就静默跳过——模板不是流程的一部分。
+  await ensureScaffold(resolveRoot(params)).catch(() => {});
+
   switch (name) {
     case "rein_one": {
       const root = resolveRoot(params);
@@ -640,6 +647,13 @@ async function callTool(name, params) {
         sections.push("用户逐条选了不落地（Ignore）——这次没有写任何文件。");
       }
       if (created.length > 0) {
+        // 没交原文时当场说出来：这件事的唯一代价在几个月后（点「原文」只剩「外部写入」），
+        // 而那时谁也补不回来了——所以必须让它在这一次的回报里响一声。
+        if (!String(params?.evidence ?? "").trim()) {
+          sections.push(
+            "这次落地**没带原文**（`evidence` 交的是空的）：这些条目以后点「原文」只会显示「外部写入」。用户确认时那句话还在这一轮里，下次落地照抄它。"
+          );
+        }
         const note = guessedRootNote(params, root);
         if (note) sections.push(note);
       }

@@ -57,6 +57,37 @@ export function defaultConfig() {
   return { hot_block_max_items: DEFAULT_CONFIG.hot_block_max_items, types };
 }
 
+/**
+ * 配置文件的**模板**：默认值显式写出来 + 注释教怎么改。
+ *
+ * 为什么显式写默认值而不是留空文件：这个文件是给人看的。空文件等于"配置在哪、能改什么"
+ * 全靠猜——而它出厂的唯一意义就是被找到一个改一个。显式写出来的代价是：以后出厂默认变了，
+ * 用户这份不会跟着变（它就是一份被改过的配置），注释里说清"整段删掉即回到出厂默认"。
+ *
+ * 内容从 DEFAULT_CONFIG / DEFAULT_TYPES 生成，不手抄——默认值只有一个真源。
+ */
+export function renderConfigTemplate() {
+  const lines = [
+    "# rein 的项目级配置。这个文件是人写的：插件只读，从不覆盖你的改动。",
+    "#",
+    "# 每轮注入的条数上限：保留**最新**的 N 条。被挤出去的条目仍在账本里、仍是生效项，",
+    "# 只是不再每轮注入（面板会在生效区写出来是哪些）。它只认正整数。",
+    `hot_block_max_items = ${DEFAULT_CONFIG.hot_block_max_items}`,
+    "",
+    "# 标签只影响账本与热块里的行首前缀，不影响任何行为。加一类照下面样式追加一段；",
+    "# 整段删掉即去掉该类；想回到出厂默认，把整个文件删掉就行。",
+    "#",
+    "#   [types.handoff]",
+    '#   label = "交接约定"'
+  ];
+
+  for (const { slug, label } of DEFAULT_TYPES) {
+    lines.push("", `[types.${slug}]`, `label = "${label}"`);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 function parseValue(raw) {
   const value = raw.replace(/\s+#.*$/, "").trim();
   if (value === "true") return true;

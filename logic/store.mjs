@@ -9,9 +9,15 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
-import { defaultConfig, parseConfig, resolveType, suggestedType } from "./config.mjs";
+import {
+  defaultConfig,
+  parseConfig,
+  renderConfigTemplate,
+  resolveType,
+  suggestedType
+} from "./config.mjs";
 import { originalLine } from "./evidence.mjs";
 import { HOT_BLOCK_BEGIN, removeHotBlock } from "./hot-block.mjs";
 import { createEntry, deliverable, parseInbox, serializeInbox } from "./inbox.mjs";
@@ -83,19 +89,50 @@ export function stateDir(root) {
 
 export async function readConfig(root) {
   const base = normalizeRoot(root);
-  // 配置是**人写**的（不会被自动创建），所以项目里放一份就一直生效；
-  // 项目里没有才去状态目录找。
+  // 配置是**人写**的（不会被自动创建）。两处都认，先项目、后本地：
+  // - 项目里放一份 → 跟着仓库走、团队共用；
+  // - 数据目录（本地层）放一份 → 只在这台机器上生效，项目里干干净净。
+  //
+  // 回退走 localDir、不是 stateDir：stateDir 回答的是"账本在哪"，跟配置该放哪无关——
+  // 账本在项目里（项目级账本）时，那个判断会把数据目录这份整个跳过，于是
+  // "把 .rein 挪到数据目录"这条正常做法反而失效。
   const project = await readIfExists(join(base, CONFIG_PATH));
   if (project) return parseConfig(project);
 
-  const dir = stateDir(base);
-  const stored = dir === base ? null : await readIfExists(join(dir, CONFIG_PATH));
+  const stored = await readIfExists(join(localDir(base), CONFIG_PATH));
   return stored ? parseConfig(stored) : defaultConfig();
 }
 
 export async function readItems(root) {
   const text = await readIfExists(join(stateDir(root), LEDGER_FILENAME));
   return text ? parseLedger(text) : [];
+}
+
+/**
+ * 第一次用到 rein：在**数据目录**里把两份模板铺好——空账本（带说明）与配置（默认值 + 注释）。
+ *
+ * 铺出来是为了"能找着"：配置在哪、能改什么，全靠这两个文件里写着的注释，而不是查文档。
+ *
+ * 只铺数据目录，**绝不碰用户项目**：项目里那本账本、那份配置都由人决定要不要建（见 README）。
+ * 已经存在的文件一律不动——用户改过的值必须留住。失败静默：模板只是顺手，
+ * 不该挡住任何一次调用（只读仓库、容器里也一样能跑）。
+ */
+export async function ensureScaffold(root) {
+  const base = normalizeRoot(root);
+  // 认不出项目（空、相对路径）就别照着一个空哈希去建目录。
+  if (!base || !isAbsolute(base)) return;
+
+  const ledger = join(localDir(base), LEDGER_FILENAME);
+  if (!existsSync(ledger) && !existsSync(join(base, LEDGER_FILENAME))) {
+    await mkdir(dirname(ledger), { recursive: true });
+    await writeFile(ledger, serializeLedger([]), "utf8");
+  }
+
+  const config = join(localDir(base), CONFIG_PATH);
+  if (!existsSync(config) && !existsSync(join(base, CONFIG_PATH))) {
+    await mkdir(dirname(config), { recursive: true });
+    await writeFile(config, renderConfigTemplate(), "utf8");
+  }
 }
 
 /**
