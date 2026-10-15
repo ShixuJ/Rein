@@ -6,7 +6,7 @@
 // - **本地层**（收件箱、原文）：永远在 $REIN_HOME 下按项目路径哈希分开存，**从不进项目**。
 
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -229,7 +229,11 @@ async function moveEvidence(root, fromId, toId, { fallback = null } = {}) {
 // 只拿到 HOME 与 PATH（没有 TMPDIR，os.tmpdir() 会退回 /tmp）——用 os.tmpdir() 两边
 // 会各写各的，标记永远读不到。按 uid 分一层，免得同机器上两个用户互相踩。
 
-const SESSION_DIR = join("/tmp", `rein-session-${typeof process.getuid === "function" ? process.getuid() : "u"}`);
+// $REIN_SESSION_DIR 只给测试用（把标记写到自己的临时目录里，别去动真机上的那份）；
+// 真机上**不要设**——钩子与 MCP server 两边都靠这个默认值对齐。
+const SESSION_DIR =
+  process.env.REIN_SESSION_DIR ||
+  join("/tmp", `rein-session-${typeof process.getuid === "function" ? process.getuid() : "u"}`);
 
 function sessionKey(root) {
   return createHash("sha1").update(normalizeRoot(root)).digest("hex").slice(0, 16);
@@ -241,7 +245,13 @@ function sessionFile(root) {
 
 export async function writeSessionMarker(root, payload) {
   await mkdir(SESSION_DIR, { recursive: true });
-  await writeFile(sessionFile(root), JSON.stringify(payload), "utf8");
+  // root 也一起写进去：面板从 UI 入口直接打开时没人给它 root（见 mostRecentProjectRoot），
+  // 只能从这里取回来。文件名是哈希，反推不回去，所以根必须存在内容里。
+  await writeFile(
+    sessionFile(root),
+    JSON.stringify({ ...payload, root: normalizeRoot(root) }),
+    "utf8"
+  );
 }
 
 export async function readSessionMarker(root) {
@@ -252,6 +262,44 @@ export async function readSessionMarker(root) {
   } catch {
     return null;
   }
+}
+
+/**
+ * 最近一次提问所在的项目根；没有标记（还没提问过）就返回 null。
+ *
+ * 这一条只服务一个场合：**面板从 UI 入口直接打开**（侧栏 app、或以 `codex://` 链接打开）。
+ * 那种打开方式没有工具调用，谁都不会把 root 递过来——宿主也不告诉面板"你在哪个项目"。
+ * 而钩子在每次提问时都会按项目写下标记，最新那个就是用户此刻所在的项目。
+ *
+ * 同步版：调用方（MCP server）在 resolveRoot 里要用它兜底，而那里是同步路径。
+ * 文件就那么几个，读一遍只有几毫秒。
+ */
+export function mostRecentProjectRoot() {
+  let names;
+  try {
+    names = readdirSync(SESSION_DIR).filter((name) => name.endsWith(".json"));
+  } catch {
+    return null;
+  }
+
+  let best = null;
+  for (const name of names) {
+    let marker;
+    try {
+      marker = JSON.parse(readFileSync(join(SESSION_DIR, name), "utf8"));
+    } catch {
+      continue;
+    }
+
+    const root = typeof marker?.root === "string" ? marker.root : null;
+    if (!root) continue;
+
+    const at = Date.parse(marker?.at ?? "");
+    const rank = Number.isFinite(at) ? at : 0;
+    if (best === null || rank > best.rank) best = { root, rank };
+  }
+
+  return best?.root ?? null;
 }
 
 // ---------------------------------------------------------------------------

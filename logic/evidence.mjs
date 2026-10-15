@@ -14,6 +14,11 @@ export const USER_PREFIX = "用户确认：";
 export const CORRECTED_PREFIX = "被纠正：";
 export const ORIGINAL_PREFIX = "原结论";
 
+// 没有原文时讲的那句：手写进账本的条目、以及这个功能之前落的条目，都会看到它。
+// 文案只有这一份——终端命令与 MCP 工具回的是同一句，别在两边各写一遍。
+export const NO_EVIDENCE_NOTE =
+  "（外部写入：不是从对话里写入的——手账本，或这个功能之前已经落成的条目。）";
+
 const KNOWN_PREFIXES = [USER_PREFIX, CORRECTED_PREFIX, "用户：", "被纠正对象：", "原文："];
 
 /**

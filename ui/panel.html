@@ -131,6 +131,17 @@
       }
       .notice[hidden] { display: none; }
 
+      /* 这块面板看的是哪个项目。从侧栏入口进来时没人把项目根递过来（server 是按
+         "最近一次提问的项目"认的），所以必须写在明面上——不然换个项目打开，看到的是
+         另一个项目的条目，而面板上没有任何线索。 */
+      .where {
+        margin: 0;
+        font-size: var(--t-small);
+        opacity: 0.7;
+        word-break: break-all;
+      }
+      .where[hidden] { display: none; }
+
       .item {
         position: relative;
         padding: 12px;
@@ -459,6 +470,7 @@
     </header>
 
     <p class="notice" id="notice">正在与宿主握手…</p>
+    <p class="where" id="where" hidden></p>
 
     <!-- 整份账本只在展开时渲染，收起时只留一张小卡片：历史消息会被宿主重新挂载，
          收起态若也画整份账本，上滑翻记录就会一路铺开一大块。 -->
@@ -502,6 +514,7 @@
     <script>
       (() => {
         const noticeEl = document.getElementById("notice");
+        const whereEl = document.getElementById("where");
         const activeEl = document.getElementById("active");
         const inactiveEl = document.getElementById("inactive");
         const inactiveSection = document.getElementById("inactiveSection");
@@ -524,6 +537,10 @@
 
         let nextId = 1;
         let hostReady = false;
+        // 项目根的两种来路：工具调用递过来的（模型知道你在哪个项目），或者 server 按
+        // "最近一次提问的项目"认出来的（从侧栏入口打开时没人递根）。后者允许重新认——
+        // 否则你切到别的项目再点刷新，它还停在原来那本账上。
+        let rootLocked = false;
         // 面板只在"刚被 rein_open_ledger 打开的那一次"里认领展开侧栏；
         // 认领过的实例不再重复认领（历史回放也不会）。
         let claimed = false;
@@ -773,10 +790,27 @@
           return wrap;
         }
 
+        /** 顶栏那句"项目：xxx"——别让人对着另一个项目的条目猜自己看的是哪本账。 */
+        function showWhere() {
+          const root = state.root ?? null;
+          if (!root) {
+            whereEl.hidden = true;
+            whereEl.textContent = "";
+            whereEl.title = "";
+            return;
+          }
+
+          const parts = String(root).split("/").filter(Boolean);
+          whereEl.textContent = `项目：${parts[parts.length - 1] ?? root}`;
+          whereEl.title = root;
+          whereEl.hidden = false;
+        }
+
         function render() {
           const active = state.items.filter(isActive).reverse();
           const inactive = state.items.filter((item) => !isActive(item)).reverse();
 
+          showWhere();
           activeEl.textContent = "";
           inactiveEl.textContent = "";
 
@@ -946,10 +980,14 @@
           render();
         }
 
-        async function call(name, args) {
+        /**
+         * 调一个工具。`dropRoot` 是给"重新认项目"用的：不传 root，让 server 重新解析
+         * （也就是按最近一次提问的项目），而不是钉在面板手里那个根上。
+         */
+        async function call(name, args, { dropRoot = false } = {}) {
           const response = await request("tools/call", {
             name,
-            arguments: { ...args, root: state.root ?? undefined }
+            arguments: dropRoot ? { ...args } : { ...args, root: state.root ?? undefined }
           });
 
           if (response?.error) {
@@ -960,6 +998,14 @@
           const payload = response?.result?.structuredContent ?? null;
           applyState(payload);
           return payload;
+        }
+
+        /**
+         * 刷新。两种情形不一样：面板是工具打开的（模型知道项目根）就刷新那一本；
+         * 是从侧栏入口打开的（没人给根）就重新认一次——不然你切了项目，它还停在上一个。
+         */
+        function refresh() {
+          return call("rein_list", {}, { dropRoot: !rootLocked });
         }
 
         async function save(item, statement, type) {
@@ -1146,7 +1192,22 @@
 
         // 刷新走 rein_list（只读）而不是 rein_open_ledger：后者会放一个新的"可展开"
         // 待取标记，那等于每次点刷新都重新抢一次侧栏。
-        refreshEl.addEventListener("click", () => call("rein_list", {}));
+        refreshEl.addEventListener("click", () => refresh());
+
+        // 从侧栏挂着的面板不会因为你切项目就重新挂载，也就不会重新取一次状态。所以
+        // 窗口重新可见时补一次——只在侧栏形态下补（对话里那张卡片按原样保持安静）。
+        document.addEventListener("visibilitychange", () => {
+          // 正在编辑/写作/确认时别自动刷新：状态一到手就会重渲染，正在打的那段字会没。
+          const busy = editing !== null || writing || confirming !== null;
+          if (
+            document.visibilityState === "visible" &&
+            hostReady &&
+            displayMode === "fullscreen" &&
+            !busy
+          ) {
+            refresh();
+          }
+        });
 
         expandEl.addEventListener("click", () => requestDisplay("fullscreen"));
 
@@ -1234,15 +1295,32 @@
           }
 
           hostReady = true;
+          // 宿主在握手时就说了"这是侧栏里的 app，还是对话里的一张卡片"：从 UI 入口点直接
+          // 打开是前者，上滑聊天记录被重新挂载是后者。先照它定形态，别先画成卡片再纠正。
+          const opening = response?.result?.hostContext?.displayMode ?? response?.result?.displayMode;
+          if (typeof opening === "string") displayMode = opening;
+
           notify("ui/notifications/initialized", {});
           refreshEl.disabled = false;
           setNotice("");
           syncMode();
           render();
 
-          // 等第一次状态到达。没等到就不认领——连项目根都不知道，不能去抢侧栏。
-          const arrived = await waitForState(1500);
-          if (arrived) await claimOpen();
+          // 等第一次状态到达：由工具打开的那一次，宿主会把账本随工具结果一起递过来。
+          // 没等到就不认领侧栏——连项目根都不知道，去抢开一个空面板没有意义。
+          const arrived = await waitForState(1200);
+          if (arrived) {
+            // 根是工具调用递过来的（模型知道你在哪个项目）：这个面板就认死那个项目。
+            rootLocked = true;
+            await claimOpen();
+            return;
+          }
+
+          // 没等到 = 这次是**从 UI 入口直接打开**的（侧栏 app、或 codex:// 链接）：没有工具
+          // 调用，也就没人把账本递过来。自己去取一次；root 不传，server 会按"最近一次提问
+          // 的项目"解析。只在侧栏形态下补取——对话里那张卡片按原样保持安静，免得它拿着
+          // 当前项目去渲染一段历史。
+          if (displayMode === "fullscreen") await refresh();
         })();
       })();
     </script>

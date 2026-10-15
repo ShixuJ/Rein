@@ -8,28 +8,26 @@ import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
-import { listTypes } from "../logic/config.mjs";
 import { DESTINATIONS } from "../logic/destination.mjs";
-import { renderEvidence } from "../logic/evidence.mjs";
+import { NO_EVIDENCE_NOTE, renderEvidence } from "../logic/evidence.mjs";
 import { buildLandingForm, readLandingAnswers } from "../logic/landing-form.mjs";
+import { readLedgerState } from "../logic/ledger-state.mjs";
+import { describeLedger } from "../logic/ledger-text.mjs";
 import {
   addRestatements,
   archiveInactive,
   commitItems,
-  countArchived,
   markPanelOpen,
+  mostRecentProjectRoot,
   readConfig,
   readEvidence,
-  readItems,
   readSessionMarker,
   retireAll,
   retireItem,
   takePanelOpen,
   reviseItem
 } from "../logic/store.mjs";
-import { isActive } from "../logic/item.mjs";
-import { DEFAULT_MAX_ITEMS, selectHotBlock } from "../logic/hot-block.mjs";
-import { hookFreshness, humanAgo } from "../logic/hook-status.mjs";
+import { humanAgo } from "../logic/hook-status.mjs";
 import { injectVersion } from "../logic/version.mjs";
 
 const APP_MIME = "text/html;profile=mcp-app";
@@ -47,10 +45,6 @@ const SERVER_VERSION = (() => {
     return "0.0.0";
   }
 })();
-
-// 没有原文时讲的那句：手写进账本的条目、以及这个功能之前落的条目，都会看到它。
-// 文案只有这一份——面板与 CLI 拿到的是同一句，别在两边各写一遍。
-const NO_EVIDENCE_NOTE = "（外部写入：不是从对话里写入的——手账本，或这个功能之前已经落成的条目。）";
 
 // 落地之后怎么回报用户：**只说结果，一句话**。模型容易照着工具结果的形状回报——
 // 文件名、session id、字段名都是内部细节，用户要知道的只是"去哪了"。
@@ -176,7 +170,15 @@ const TOOLS = [
       },
       additionalProperties: false
     },
-    _meta: { ui: { resourceUri: PANEL_URI, visibility: ["model", "app"] } }
+    _meta: {
+      ui: { resourceUri: PANEL_URI, visibility: ["model", "app"] },
+      // 宿主原生入口：声明这一条之后，这个面板在界面上就是**可以点一下直接开**的
+      // （侧栏 app / `codex://plugins/<pluginId>/app/rein_open_ledger`），不必先跟模型说话。
+      // 键名照宿主自己读的那份写：入口点在 `openai/ui.entrypoints` 上，`ui/resourceUri`
+      // 是同一个资源的旧键——两边都给，少一个宿主会判成"声明了入口却没接上界面"。
+      "openai/ui": { entrypoints: [{ type: "global" }, { type: "thread" }] },
+      "ui/resourceUri": PANEL_URI
+    }
   },
   {
     name: "rein_take_open",
@@ -304,9 +306,32 @@ function localDate() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
+/**
+ * 这一条调用该作用到哪个项目。顺序是刻意的：
+ *
+ *   1. 调用方显式给的 root——主 Agent 认得工作区，就该由它给；
+ *   2. CODEX_WORKSPACE_ROOT；
+ *   3. **最近一次提问的项目**（mostRecentProjectRoot）——面板从 UI 入口直接打开时走这条：
+ *      那次打开没有工具调用，没人递 root，而本进程的 cwd 是插件目录，不兜底就会去读
+ *      插件自己那本账（空的），面板看起来就像坏了；
+ *   4. cwd——最后的退路。
+ */
 function resolveRoot(params) {
-  const root = params?.root ?? process.env.CODEX_WORKSPACE_ROOT ?? process.cwd();
-  return String(root);
+  const explicit = params?.root;
+  if (explicit) return String(explicit);
+  if (process.env.CODEX_WORKSPACE_ROOT) return String(process.env.CODEX_WORKSPACE_ROOT);
+  return String(mostRecentProjectRoot() ?? process.cwd());
+}
+
+/**
+ * 没人给 root 的时候，是谁替它认的项目。**写操作**的回报里要带上这一句。
+ *
+ * "看不见的默认值"是这类 bug 里最贵的一种：条目悄悄落进另一个项目的账本，
+ * 当时的对话里没有任何线索。所以把这个猜测摆到台面上。
+ */
+function guessedRootNote(params, root) {
+  if (params?.root || process.env.CODEX_WORKSPACE_ROOT) return "";
+  return `（这次没人给项目根，按**最近一次提问的项目**认成了 \`${root}\`——不对就说一声。）`;
 }
 
 /** 取代与警告这两段在落地之后要出，写一次。 */
@@ -321,47 +346,6 @@ function linkLines({ replaced = [], warnings = [] }) {
   }
 
   return lines;
-}
-
-/** 面板要的东西：账本原文 + 当前类型表。改完之后也回这一份，面板照着重渲染。 */
-async function ledgerState(root) {
-  const config = await readConfig(root);
-  const items = await readItems(root);
-  const active = items.filter(isActive).length;
-  // 热块的真实窗口：上限之外的那些仍在账本里、仍是 active，但不再每轮注入。
-  // 面板要把这件事说出来，不然一条已确认项会静默退出注入而谁也看不见。
-  const configured = Number(config?.hot_block_max_items);
-  const maxItems = Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MAX_ITEMS;
-  const hot = selectHotBlock(items, { maxItems });
-  // 归档里的条目不进面板（面板就是嫌它们太长才要归档），只报个数字，
-  // 让人知道历史没丢、去哪儿找。
-  const archived = await countArchived(root).catch(() => 0);
-  // 「钩子还在不在跑」——这是最容易静默失效的一环（装完没重启、重装后没重新信任）。
-  const hook = hookFreshness(await readSessionMarker(root).catch(() => null));
-
-  return {
-    root,
-    // 这里**不带**任何原文信息：账本状态是给模型看的，原文是给用户看的，
-    // 面板要用时自己点开去 rein_evidence 取——模型不会因此背上原文。
-    items,
-    types: listTypes(config),
-    active,
-    total: items.length,
-    archived: { count: archived },
-    hotBlock: { maxItems, shown: hot.shown.length, dropped: hot.dropped },
-    hook
-  };
-}
-
-/** 账本的一句话摘要。上限把条目挤出热块时必须说出来，否则那是静默失效。 */
-function describeLedger(state) {
-  const parts = [`${state.active} 条生效、${state.total - state.active} 条已失效`];
-  if (state.hotBlock?.dropped > 0) {
-    parts.push(
-      `热块这次只带前 ${state.hotBlock.shown} 条，另外 ${state.hotBlock.dropped} 条超出上限（${state.hotBlock.maxItems}）——它们仍在账本里，但不再每轮注入`
-    );
-  }
-  return `${parts.join("；")}。`;
 }
 
 /** 钩子看起来没在跑时的一句话提示；正常就返回空串。 */
@@ -406,7 +390,7 @@ async function callTool(name, params) {
         // 这条不是从对话里来的——原文位置注明它是用户本人写的，别留一个说不清的空档。
         evidence: "用户本人在账本面板直接写入（没有对话原文）。"
       });
-      const state = await ledgerState(root);
+      const state = await readLedgerState(root);
       const message = `已写入 ${created[0]?.id ?? ""}——从下一轮起每轮带上。`;
 
       return {
@@ -416,7 +400,7 @@ async function callTool(name, params) {
     }
 
     case "rein_list": {
-      const state = await ledgerState(resolveRoot(params));
+      const state = await readLedgerState(resolveRoot(params));
       const body = state.items.length
         ? `${describeLedger(state)}\n${[...state.items].reverse()
             .map((item) => `${item.id} · ${item.type} · ${item.status}：${item.statement}`)
@@ -430,7 +414,7 @@ async function callTool(name, params) {
 
     case "rein_open_ledger": {
       const root = resolveRoot(params);
-      const state = await ledgerState(root);
+      const state = await readLedgerState(root);
 
       // 放一个一次性的待取标记：面板挂载后会来取，取到才展开侧栏。
       // 历史回放取不到——所以上滑聊天记录不会把侧栏一次次抢走。
@@ -461,7 +445,7 @@ async function callTool(name, params) {
     case "rein_retire_all": {
       const root = resolveRoot(params);
       const result = await retireAll(root);
-      const state = await ledgerState(root);
+      const state = await readLedgerState(root);
       const message =
         result.retired.length === 0
           ? "没有生效项可退休，账本没动。"
@@ -476,7 +460,7 @@ async function callTool(name, params) {
     case "rein_archive": {
       const root = resolveRoot(params);
       const result = await archiveInactive(root);
-      const state = await ledgerState(root);
+      const state = await readLedgerState(root);
       const message =
         result.archived.length === 0
           ? "没有失效条目可归档，账本没动。"
@@ -507,11 +491,12 @@ async function callTool(name, params) {
               source: `账本面板 · 取代 ${id}`
             });
 
-      const state = await ledgerState(root);
+      const state = await readLedgerState(root);
       const message = result.ok ? describeEdit(result, state.types) : `没改动：${result.reason}`;
+      const note = result.ok ? guessedRootNote(params, root) : "";
 
       return {
-        content: [{ type: "text", text: message }],
+        content: [{ type: "text", text: note ? `${message}\n\n${note}` : message }],
         structuredContent: {
           ...state,
           ok: result.ok,
@@ -653,6 +638,10 @@ async function callTool(name, params) {
       }
       if (created.length === 0 && inline.length === 0 && inboxed.length === 0) {
         sections.push("用户逐条选了不落地（Ignore）——这次没有写任何文件。");
+      }
+      if (created.length > 0) {
+        const note = guessedRootNote(params, root);
+        if (note) sections.push(note);
       }
       sections.push(REPLY_RULE);
 
