@@ -737,6 +737,24 @@
         // 它只活这一次、不落盘、不进账本状态——跟这个面板里别的一次性状态一个待遇。
         let highlight = null;
         let highlightTimer = null;
+
+        /**
+         * 把高亮收掉；真收掉了就返回 true（调用方据此决定要不要重画）。
+         *
+         * 高亮只该活在"你点它的那个上下文里"。而清它的那个计时器**不可靠**：隐藏的 iframe 里
+         * 浏览器会节流甚至冻住计时器，四秒能拖成很久——侧栏一收，那个圈就在主线那张卡片上
+         * 亮着（就是这么露出去的）。所以除了计时器，换上下文时也主动清一次。
+         *
+         * 代价说清：定位之后又切换展开/收起，那个圈就没了。这是有意的——"刚才这条在这儿"
+         * 是个当下的记号，不该跨上下文活着。
+         */
+        function clearHighlight() {
+          if (!highlight) return false;
+          clearTimeout(highlightTimer);
+          highlightTimer = null;
+          highlight = null;
+          return true;
+        }
         // 正在等"确认退休"的那条编号。null = 没有在等。
         let confirming = null;
         let displayMode = "inline";
@@ -1744,14 +1762,16 @@
         // 从侧栏挂着的面板不会因为你切项目就重新挂载，也就不会重新取一次状态。所以
         // 窗口重新可见时补一次——只在侧栏形态下补（对话里那张卡片按原样保持安静）。
         document.addEventListener("visibilitychange", () => {
+          // 被藏起来（侧栏收起、面板被挪走）先把高亮收掉并重画：留着它，那个圈会在别处冒出来，
+          // 而清它的计时器在被隐藏的 iframe 里并不可靠。
+          if (document.visibilityState !== "visible") {
+            if (clearHighlight()) render();
+            return;
+          }
+
           // 正在编辑/写作/确认时别自动刷新：状态一到手就会重渲染，正在打的那段字会没。
           const busy = editing !== null || writing || confirming !== null;
-          if (
-            document.visibilityState === "visible" &&
-            hostReady &&
-            displayMode === "fullscreen" &&
-            !busy
-          ) {
+          if (hostReady && displayMode === "fullscreen" && !busy) {
             refresh();
           }
         });
@@ -1815,8 +1835,10 @@
           // 宿主告诉我们展示方式变了（用户在 inline 与 fullscreen 之间切）。
           if (data.method === "ui/notifications/host-context-changed") {
             const next = data.params?.displayMode;
-            if (typeof next === "string") {
+            if (typeof next === "string" && next !== displayMode) {
               displayMode = next;
+              // 换了展示方式就是换了地方：那个记号不该跟着走。
+              if (clearHighlight()) render();
               syncMode();
             }
           }
