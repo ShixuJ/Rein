@@ -53,6 +53,45 @@ test("脚本取的每个 id，HTML 里都得有——id 打错在这块是静默
   }
 });
 
+test("认不认得出「从通用账本引来的」，靠 server 递过来的保留标签", async () => {
+  const script = scriptOf(await panelSource());
+
+  // 那三个字只允许有一处真源（logic/common-ledger.mjs）。面板这边但凡自己抄一份，
+  // 改说法时就会漏——分栏会静默地一栏都不分。
+  assert.match(script, /item\.type === state\.commonLabel/, "挑出引来的条目要看 state.commonLabel");
+  assert.match(script, /groupHead\(state\.commonLabel\)/, "分组小标题也用那个标签");
+});
+
+test("「已失效」默认是收着的", async () => {
+  const html = await panelSource();
+  const folds = [...html.matchAll(/<button class="fold" id="([^"]+)" aria-expanded="([^"]+)"/g)];
+
+  // 两页各一个：本项目那本、通用账本那本。
+  assert.equal(folds.length, 2, "两页各该有一个折叠三角");
+  for (const [, id, expanded] of folds) {
+    assert.equal(expanded, "false", `${id} 在标记里就该是收着的`);
+  }
+
+  // 标记只管首屏那一下，真正的默认值是脚本里这个开关。
+  assert.match(scriptOf(html), /let inactiveOpen = false/, "开关本身也得默认是关的");
+});
+
+test("「直接写一条」的加号跟着「本项目」那一组走", async () => {
+  const html = await panelSource();
+  const script = scriptOf(html);
+
+  // 它写进去的是本项目的条目，所以住在「本项目」的标题行上——动作贴着它要作用的那份列表。
+  assert.equal([...html.matchAll(/id="addOne"/g)].length, 1, "加号只有一个");
+  assert.match(
+    html,
+    /<div class="head groupRow" id="projectGroup">[\s\S]*?id="addOne"/,
+    "加号应该住在「本项目」的标题行里"
+  );
+
+  // 而这一行与写作表单是静态节点：渲染时得把它们搬进生效区，不然它们就没地方待了。
+  assert.match(script, /activeEl\.append\(projectGroupEl, writeOneEl\)/);
+});
+
 test("条目按钮叫「修改」；直接写一条会带上标签", async () => {
   const script = scriptOf(await panelSource());
 
