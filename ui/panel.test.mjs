@@ -138,6 +138,16 @@ test("引来的条目能改能退；「查看通用账本」按断言定位，�
   assert.match(script, /改完这条就是本项目自己的了/);
 });
 
+test("高亮只在点它的那个上下文里活着：换了展示方式、或者被藏起来，都要清", async () => {
+  const script = scriptOf(await panelSource());
+
+  assert.match(script, /function clearHighlight\(\)/);
+  // 光靠计时器不行——隐藏的 iframe 里计时器会被节流，四秒能拖成很久，
+  // 那个圈就是这么跟着面板跑到主线那张卡片上的。
+  assert.match(script, /next !== displayMode[\s\S]{0,600}?clearHighlight\(\)/);
+  assert.match(script, /visibilityState !== "visible"[\s\S]{0,300}?clearHighlight\(\)/);
+});
+
 test("条目按钮叫「修改」；直接写一条会带上标签", async () => {
   const script = scriptOf(await panelSource());
 
