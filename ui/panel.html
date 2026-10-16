@@ -7,7 +7,7 @@
       /* 主题用半透明灰而非写死的色值：宿主面板的底色不由我们定，灰在两个主题下都能落住。
          唯一的彩色是强调色与"退休"的红——后者是因为退休不可逆，值得一个警告性的样子。
 
-         尺寸都走这几组令牌：字号四档（14/13/12/11）、间距只用 4/6/8/12/16/24、
+         尺寸都走这几组令牌：字号五档（16/14/13/12/11）、间距只用 4/6/8/12/16/24、
          圆角三档。样式表里冒出 13.5px 或 27px 这种数，就是令牌不够用了，别就地加一个新的。 */
       :root {
         color-scheme: light dark;
@@ -36,6 +36,9 @@
         --danger-tint: rgba(180, 45, 31, 0.20);
         --danger-line: rgba(180, 45, 31, 0.42);
 
+        /* 字号五档，三档给标题用（对齐账本 / 生效中 / 通用账本 那三层），中间两档给正文
+           和贴着字的小块。 */
+        --t-display: 16px;
         --t-title: 14px;
         --t-body: 13px;
         --t-small: 12px;
@@ -48,6 +51,15 @@
       }
       @media (prefers-color-scheme: dark) {
         :root {
+          /* 半透明灰在浅色底上是"墨"，在深色底上就成了一层雾——同一组值在夜里读不出来，
+             所以结构色两个主题各自有值。夜里换成白的 alpha，并且抬一档：线本来就细，
+             暗底上要更实才抵得住（#1e1e1e 上，--line 与底的差值从 27 抬到 45）。
+             灰底那两档（编号、类型、计数那些小块）按浅色主题的差值对齐，不跟着抬。 */
+          --line: rgba(255, 255, 255, 0.20);
+          --line-strong: rgba(255, 255, 255, 0.34);
+          --fill: rgba(255, 255, 255, 0.06);
+          --fill-strong: rgba(255, 255, 255, 0.12);
+
           --accent: #8fb0ff;
           --accent-ink: #101625;
           --accent-hover: #a5c1ff;
@@ -84,14 +96,14 @@
         color: var(--accent);
         flex: none;
       }
-      h1 { font-size: var(--t-title); font-weight: 600; margin: 0; flex: 1; letter-spacing: 0.01em; }
+      h1 { font-size: var(--t-display); font-weight: 600; margin: 0; flex: 1; letter-spacing: 0.01em; }
       /* 一级标题：生效中 / 已失效。它是这份列表的骨架，所以得比下面那层小标题明显一档——
          抬到正文字号、几乎全墨，扫一眼就能找到"账本长到这里了"。 */
       h2 {
         display: flex;
         align-items: center;
         gap: 6px;
-        font-size: var(--t-body);
+        font-size: var(--t-title);
         font-weight: 600;
         letter-spacing: 0.02em;
         opacity: 0.9;
@@ -137,7 +149,9 @@
          "最近一次提问的项目"认的），所以必须写在明面上——不然换个项目打开，看到的是
          另一个项目的条目，而面板上没有任何线索。 */
       .where {
-        margin: 0;
+        /* 上下都留一口气：上面是面板标题那一行，下面是页签那一行——它夹在中间，
+           跟谁都不该贴着。 */
+        margin: 12px 0;
         font-size: var(--t-small);
         opacity: 0.7;
         word-break: break-all;
@@ -166,7 +180,7 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        font-size: var(--t-micro);
+        font-size: var(--t-small);
         font-weight: 600;
         letter-spacing: 0.04em;
         opacity: 0.7;

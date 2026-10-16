@@ -22,6 +22,12 @@ function scriptOf(html) {
   return match[1];
 }
 
+function styleOf(html) {
+  const match = /<style>([\s\S]*?)<\/style>/.exec(html);
+  assert.ok(match, "panel.html 里找不到 <style>");
+  return match[1];
+}
+
 test("面板脚本能编译", async () => {
   // 只编译、不执行。
   new vm.Script(scriptOf(await panelSource()));
@@ -90,6 +96,32 @@ test("「直接写一条」的加号跟着「本项目」那一组走", async ()
 
   // 而这一行与写作表单是静态节点：渲染时得把它们搬进生效区，不然它们就没地方待了。
   assert.match(script, /activeEl\.append\(projectGroupEl, writeOneEl\)/);
+});
+
+test("样式里 var() 用到的变量，都得有定义", async () => {
+  const style = styleOf(await panelSource());
+
+  const defined = new Set([...style.matchAll(/^\s*(--[\w-]+)\s*:/gm)].map((match) => match[1]));
+  const used = new Set([...style.matchAll(/var\((--[\w-]+)/g)].map((match) => match[1]));
+
+  assert.ok(used.size > 0 && defined.size > 0, "一个变量都没扫出来？扫法得跟着写法改");
+  for (const name of used) {
+    // 变量名写错一个字母不会报错，那条描边/底色就静静地不画——跟 id 打错是同一类坏法。
+    assert.ok(defined.has(name), `${name} 没有定义`);
+  }
+});
+
+test("结构色两个主题各自有值", async () => {
+  const style = styleOf(await panelSource());
+  const dark = /@media \(prefers-color-scheme: dark\) \{([\s\S]*?)\n      \}/.exec(style);
+
+  assert.ok(dark, "找不到夜间模式那一段");
+
+  // 线、分隔、灰底小块这几条是画结构用的：半透明灰当"墨"只对浅色底成立，
+  // 深色底上得换成白的 alpha，否则就是一层雾。
+  for (const name of ["--line", "--line-strong", "--fill", "--fill-strong"]) {
+    assert.match(dark[1], new RegExp(`${name}:`), `夜间模式没给 ${name} 自己的值`);
+  }
 });
 
 test("条目按钮叫「修改」；直接写一条会带上标签", async () => {
