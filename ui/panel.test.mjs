@@ -124,6 +124,20 @@ test("结构色两个主题各自有值", async () => {
   }
 });
 
+test("引来的条目能改能退；「查看通用账本」按断言定位，对不上时说实话", async () => {
+  const script = scriptOf(await panelSource());
+
+  assert.match(script, /button\("查看通用账本"/);
+  assert.doesNotMatch(script, /去通用账本改/, "老名字不该留着");
+
+  // 认源头靠断言一字不差——编号两本账各算各的，对不上。
+  assert.match(script, /candidate\.statement === item\.statement/);
+  // 对不上时说实话说清楚，而不是随手指一条不对的给你。
+  assert.match(script, /源头可能被改过或者退休了/);
+  // 改引来的那条会发生什么，得写在编辑框里。
+  assert.match(script, /改完这条就是本项目自己的了/);
+});
+
 test("条目按钮叫「修改」；直接写一条会带上标签", async () => {
   const script = scriptOf(await panelSource());
 

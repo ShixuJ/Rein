@@ -15,8 +15,10 @@ import {
   retireCommonItem,
   reviseCommonItem
 } from "./common-ledger.mjs";
+import { isActive } from "./item.mjs";
 import {
   commitItems,
+  commonDir,
   readCommonEvidence,
   readCommonItems,
   readEvidence,
@@ -191,6 +193,28 @@ test("引下来：项目账本里已经有同一句，就不重复", async () =>
   assert.equal(result.action, "exists");
   assert.equal(result.existing, "C-001");
   assert.equal((await readItems(root)).length, 1);
+});
+
+test("退休本地那份副本：通用账本一个字节都不动", async () => {
+  await writeCommonLedger([]);
+  const common = await commitCommonItems([{ statement: "通用的一条。" }], { date: DATE });
+
+  const root = await scratchProject();
+  const imported = await importFromCommon(root, { id: common.created[0].id, date: TODAY });
+  assert.equal(imported.action, "imported");
+
+  const before = await readFile(join(commonDir(), "ALIGNMENT.md"), "utf8");
+  const retired = await retireItem(root, { id: imported.item.id });
+
+  assert.equal(retired.action, "retired");
+  assert.equal(retired.item.status, "retired");
+  assert.equal(
+    await readFile(join(commonDir(), "ALIGNMENT.md"), "utf8"),
+    before,
+    "退的是本项目这份副本，源头一个字都不该动"
+  );
+  assert.equal((await readItems(root)).filter(isActive).length, 0, "本地那条不再生效");
+  assert.equal((await readCommonItems()).filter(isActive).length, 1, "通用账本那条还生效着");
 });
 
 test("引下来：编号不在、或者已经失效，都不动项目账本", async () => {

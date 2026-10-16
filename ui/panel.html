@@ -237,6 +237,13 @@
         border-style: dashed;
         opacity: 0.8;
       }
+      /* 从项目页跳过来定位的那一条：描边 + 一圈光晕。跟"正在编辑"同族但不同款——编辑态
+         还压着一层底色，这里没有，所以两个态同时出现也不打架。几秒后自己褪掉
+         （见 findInCommon）：不然它就成了一个谁也不记得什么时候留下的高亮。 */
+      .item.highlight {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-tint);
+      }
 
       .meta {
         display: flex;
@@ -726,6 +733,10 @@
         const commonLedger = { items: [], active: 0, total: 0 };
         const commonEvidenceText = new Map();
         const commonEvidenceOpen = new Set();
+        // 「查看通用账本」跳过去以后，把源头那条标出来的编号，以及它的褪色计时器。
+        // 它只活这一次、不落盘、不进账本状态——跟这个面板里别的一次性状态一个待遇。
+        let highlight = null;
+        let highlightTimer = null;
         // 正在等"确认退休"的那条编号。null = 没有在等。
         let confirming = null;
         let displayMode = "inline";
@@ -762,6 +773,24 @@
          */
         function fromCommon(item) {
           return Boolean(state.commonLabel) && item.type === state.commonLabel;
+        }
+
+        /**
+         * 这张卡是"从通用账本引来、此刻显示在项目页"的那种吗？
+         *
+         * 判据要带上页面：通用页里手写的那几条，类型也是保留标签，但它们不是"引来的副本"。
+         * 引来的副本能改能退——改完它就不再是引来的了（标签换成你选的分类）。
+         */
+        function isBorrowed(item, page) {
+          return page === "project" && fromCommon(item);
+        }
+
+        /** 卡片上那几个状态类：正在编辑、或者刚从项目页跳过来定位到的。 */
+        function cardClass(item, page, extra = []) {
+          const classes = ["item", ...extra];
+          if (editing?.id === item.id) classes.push("editing");
+          if (page === "common" && highlight === item.id) classes.push("highlight");
+          return classes.join(" ");
         }
 
         /** "生效中"里的分组小标题。 */
@@ -813,12 +842,13 @@
 
         function renderActiveItem(item, page) {
           const card = document.createElement("article");
-          card.className = editing?.id === item.id ? "item editing" : "item";
+          card.className = cardClass(item, page);
+          const borrowed = isBorrowed(item, page);
 
           const meta = metaRow([
             ["id", item.id],
             // 项目页上，从通用账本引来的那条把类型那格标出来——扫一眼就分得出。
-            [page === "project" && fromCommon(item) ? "type foreign" : "type", labelOf(item.type)],
+            [borrowed ? "type foreign" : "type", labelOf(item.type)],
             ["date", item.date]
           ]);
 
@@ -858,7 +888,16 @@
               })
             );
 
-            card.append(meta, box, chips, actions);
+            card.append(meta);
+            // 改引来的那条，是把它变成本项目自己的：这句话得说在明面上，不然很容易以为
+            // 自己在改"那条通用的"（通用账本里那份其实一个字都不会动）。
+            if (borrowed) {
+              const note = document.createElement("p");
+              note.className = "note";
+              note.textContent = "改完这条就是本项目自己的了——通用账本里那份一个字都不动。";
+              card.append(note);
+            }
+            card.append(box, chips, actions);
             return card;
           }
 
@@ -872,10 +911,7 @@
           if (confirming === item.id) {
             const warn = document.createElement("p");
             warn.className = "warn";
-            warn.textContent =
-              page === "common"
-                ? "退休不可逆：这条在通用账本里不再生效，条目留在账里。已经引到项目里的那几份是副本，不受影响——要一起收，得去那几个项目里各退一次。"
-                : "退休不可逆：这条不再每轮注入，它会留在账本的历史里。";
+            warn.textContent = retireWarning(page, borrowed);
 
             const confirmActions = document.createElement("div");
             confirmActions.className = "actions";
@@ -901,17 +937,21 @@
             // 一列卡片站满蓝块，重点反而没了。蓝色的那颗仍然是最常按的「修改」。
             actions.append(
               button("引入到本项目", () => importItem(item), !hostReady),
-              editButton(item),
+              editButton(item, page),
               retireButton(item)
             );
-          } else if (fromCommon(item)) {
-            // 引来的那条在项目页是只读的：措辞归通用账本管。就地改本地这份会让它跟源头分家，
-            // 分家之后"这条是通用的"就成了假话。要改就过去改——那边改完，这条是另一条了，
-            // 得重新引（这也是复制模型的代价，写在面上比藏起来强）。
-            actions.append(button("去通用账本改", () => switchPage("common"), !hostReady));
+          } else if (borrowed) {
+            // 引来的那条能改能退——它是本项目的一份普通条目，不是只读的展示。区别只有两处：
+            // 改完它就不再"来自通用账本"（标签换成你选的分类，它自己走到本项目那一栏），
+            // 以及不给「推到通用账本」（它本来就在那儿）。
+            actions.append(
+              editButton(item, page),
+              retireButton(item),
+              button("查看通用账本", () => findInCommon(item), !hostReady)
+            );
           } else {
             actions.append(
-              editButton(item),
+              editButton(item, page),
               retireButton(item),
               button("推到通用账本", () => promoteItem(item), !hostReady)
             );
@@ -938,9 +978,16 @@
           return card;
         }
 
-        function editButton(item) {
+        function editButton(item, page) {
           const edit = button("修改", () => {
-            editing = { id: item.id, statement: item.statement, type: item.type };
+            editing = {
+              id: item.id,
+              statement: item.statement,
+              // 引来的那条，类型是保留标签、不在配置那套词表里，所以先替你选一个真分类：
+              // 默认停在第一个（跟「直接写一条」一个规矩），你不改就是它。
+              // 退休不碰标签，不走这里。
+              type: isBorrowed(item, page) ? (state.types[0]?.slug ?? "") : item.type
+            };
             confirming = null;
             setResult("");
             render();
@@ -959,9 +1006,27 @@
           return retire;
         }
 
-        function renderInactiveItem(item) {
+        /**
+         * 退休不可逆，而三处的后果各不相同——这段话错一句，用户就会以为动到了别的地方。
+         *
+         * 通用页退的是**源头**（以后谁引都少一条），项目页退的是**这一份**；如果这一份是从
+         * 通用账本引来的，那它退了源头照样在——这句必须说，不然"我退了它怎么还在那儿"。
+         */
+        function retireWarning(page, borrowed) {
+          if (page === "common") {
+            return "退休不可逆：这条在通用账本里不再生效，条目留在账里。已经引到项目里的那几份是副本，不受影响——要一起收，得去那几个项目里各退一次。";
+          }
+          if (borrowed) {
+            return "退休不可逆：这条不再每轮注入，它会留在账本的历史里。通用账本里那份不受影响——退掉的只是本项目这份副本。";
+          }
+          return "退休不可逆：这条不再每轮注入，它会留在账本的历史里。";
+        }
+
+        function renderInactiveItem(item, page) {
           const card = document.createElement("article");
-          card.className = "item inactive";
+          // 失效的那条也可能是"刚从项目页跳过来定位到的那条"（源头退休过、或被取代过），
+          // 所以状态类照样要过一遍。
+          card.className = cardClass(item, page, ["inactive"]);
 
           card.append(
             metaRow([
@@ -1104,7 +1169,7 @@
           }
 
           inactiveSection.hidden = inactive.length === 0;
-          for (const item of inactive) inactiveEl.append(renderInactiveItem(item));
+          for (const item of inactive) inactiveEl.append(renderInactiveItem(item, "project"));
 
           if (hostReady) {
             activeCountEl.textContent = String(active.length);
@@ -1133,7 +1198,7 @@
           }
 
           commonInactiveSection.hidden = inactive.length === 0;
-          for (const item of inactive) commonInactiveEl.append(renderInactiveItem(item));
+          for (const item of inactive) commonInactiveEl.append(renderInactiveItem(item, "common"));
 
           if (hostReady) {
             commonCountEl.textContent = String(active.length);
@@ -1425,6 +1490,55 @@
         async function importItem(item) {
           setResult("正在引入…");
           await call("rein_import", { id: item.id });
+        }
+
+        /**
+         * 从项目页跳去看这条的"源头"：切到通用账本那一页，把对应的那条标出来。
+         *
+         * 认哪一条靠**断言一字不差**，不靠编号——两本账的编号各算各的。引来的那一刻两边的
+         * 文字是一样的；而你一旦改过本地这份，它就不再是"引来的"了（标签掉了、这颗按钮也
+         * 没了）——所以只要按钮还看得见，文字就一定还对得上。
+         *
+         * 对不上只有两种可能：源头被改过（取代），或者被退休。那时候**说实话**，不悄悄指
+         * 一条不对的给你：你手里这份是当时引来的副本，这件事本身你该知道——那正是"复制不
+         * 跟着变"这个代价露头的地方。
+         */
+        async function findInCommon(item) {
+          const payload = await call("rein_common", {});
+          if (!payload) return;
+
+          const same = (candidate) => candidate.statement === item.statement;
+          // 生效的优先：源头退休过、后来又用同样的文字回来了，也该指生效的那条。
+          const target =
+            commonLedger.items.find((candidate) => isActive(candidate) && same(candidate)) ??
+            commonLedger.items.find(same) ??
+            null;
+
+          if (page !== "common") switchPage("common");
+
+          if (!target) {
+            setResult(
+              "通用账本里没有一字不差的这一条了——源头可能被改过或者退休了。你手里这份是当时引来的副本。"
+            );
+            return;
+          }
+
+          // 源头那条落在"已失效"里的话，把那段展开：不然你切过去看到一份收着的列表，会以为没找到。
+          if (!isActive(target)) inactiveOpen = true;
+
+          highlight = target.id;
+          render();
+
+          // 只滚 iframe 自己这一层。scrollIntoView 会一路冒到宿主那层，可能把侧栏也带着滚。
+          const card = commonPageEl.querySelector(".item.highlight");
+          if (card) window.scrollTo({ top: Math.max(0, card.offsetTop - 80), behavior: "smooth" });
+
+          // 几秒后自己褪掉——它会变成一个"谁也不记得什么时候留下的高亮"，那比没有更糟。
+          clearTimeout(highlightTimer);
+          highlightTimer = setTimeout(() => {
+            highlight = null;
+            render();
+          }, 4000);
         }
 
         async function retireEverything() {

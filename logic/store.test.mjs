@@ -8,6 +8,7 @@ import test from "node:test";
 import { DEFAULT_MAX_ITEMS, renderHotBlock } from "./hot-block.mjs";
 import { isActive } from "./item.mjs";
 import { parseLedger } from "./ledger.mjs";
+import { COMMON_LABEL } from "./common-ledger.mjs";
 import {
   addRestatements,
   archiveInactive,
@@ -855,4 +856,28 @@ test("原文按账分家：同一个编号，两本账互不串门", async () =>
   // 空文本等于没留——跟项目那边是同一条规则。
   await writeCommonEvidence("C-001", "   ");
   assert.equal(await readCommonEvidence("C-001"), null);
+});
+
+test("改一条从通用账本引来的：它变成本项目自己的，标签换成配置里的分类", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "引来的那条。", type: COMMON_LABEL }], {
+    date: DATE
+  });
+
+  const result = await reviseItem(root, {
+    id: created[0].id,
+    statement: "改成本项目自己的说法。",
+    type: "concept-alignment",
+    date: DATE
+  });
+
+  assert.equal(result.action, "superseded");
+  assert.equal(result.item.type, "concept-alignment", "新条目带配置里的分类");
+  assert.equal(result.item.statement, "改成本项目自己的说法。");
+
+  const items = await readItems(root);
+  const previous = items.find((item) => item.id === created[0].id);
+  assert.equal(previous.type, COMMON_LABEL, "旧的那条原样留在历史里");
+  assert.equal(previous.status, `superseded by ${result.item.id}`);
+  assert.equal(items.filter(isActive).length, 1, "同一句话不会既旧又新地一起注入");
 });
