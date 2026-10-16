@@ -19,33 +19,54 @@ function renderItem(item) {
   ];
 }
 
-export function serializeLedger(items) {
+/**
+ * 文件头。条目的**形状**只有一份（上面 renderItem 那几行），但"这是哪本账"不一样：
+ * 项目账本是这个项目的，通用账本跨项目。所以头拎出来当参数传进来，序列化本身不管它。
+ */
+const PROJECT_HEADER = [
+  "# ALIGNMENT",
+  "",
+  "这个项目的对齐账本。由 rein 维护（对话里落地、面板里改动都会写到这里）；失效条目",
+  "保留在下方以便追溯——取代与退休都不删条目。",
+  "",
+  "<!--",
+  "  人也可以直接改它：它只是普通 Markdown，`git diff` 读得懂。条目长相如下，",
+  "  插件只认这个形状（其余文字一律忽略，所以随便加注释）：",
+  "",
+  "    ### C-001 · <类型> · 2026-10-16",
+  "    断言：一句话就是这条结论。",
+  "    来源：侧聊 · 2026-10-16 · 那轮在聊什么",
+  "    状态：active",
+  "",
+  "  类型就是 .rein/config.toml 里定义的那些标签；状态那几个字是插件写的",
+  "  （active / retired / superseded by C-0NN），尽量别手改。每轮注入的是",
+  "  「生效中」里最新的 N 条，上限与标签见 .rein/config.toml。",
+  "-->"
+];
+
+const COMMON_HEADER = [
+  "# ALIGNMENT（通用）",
+  "",
+  "跨项目的通用前提。由 rein 维护：项目账本可以把一条推上来，也可以把这里的一条引进去。",
+  "两边都是你手动发起的复制，源条目一个字节都不动——这里改了不会追着改项目里的那份。",
+  "",
+  "<!--",
+  "  条目的形状与项目账本完全一样（见那份文件里的说明），编号是这本账自己的。",
+  "  它**不参与每轮注入**：想让它生效，把它引到某个项目里。",
+  "-->"
+];
+
+export const LEDGER_HEADERS = { project: PROJECT_HEADER, common: COMMON_HEADER };
+
+/**
+ * 账本正文。默认是项目账本那份头，`header` 换成 `LEDGER_HEADERS.common` 就是通用账本——
+ * 除了头，两本账写出字节的形状完全一样。
+ */
+export function serializeLedger(items, { header = PROJECT_HEADER } = {}) {
   const active = items.filter(isActive);
   const retired = items.filter((item) => !isActive(item));
 
-  const lines = [
-    "# ALIGNMENT",
-    "",
-    "这个项目的对齐账本。由 rein 维护（对话里落地、面板里改动都会写到这里）；失效条目",
-    "保留在下方以便追溯——取代与退休都不删条目。",
-    "",
-    "<!--",
-    "  人也可以直接改它：它只是普通 Markdown，`git diff` 读得懂。条目长相如下，",
-    "  插件只认这个形状（其余文字一律忽略，所以随便加注释）：",
-    "",
-    "    ### C-001 · <类型> · 2026-10-16",
-    "    断言：一句话就是这条结论。",
-    "    来源：侧聊 · 2026-10-16 · 那轮在聊什么",
-    "    状态：active",
-    "",
-    "  类型就是 .rein/config.toml 里定义的那些标签；状态那几个字是插件写的",
-    "  （active / retired / superseded by C-0NN），尽量别手改。每轮注入的是",
-    "  「生效中」里最新的 N 条，上限与标签见 .rein/config.toml。",
-    "-->",
-    "",
-    "## 生效中",
-    ""
-  ];
+  const lines = [...header, "", "## 生效中", ""];
 
   if (active.length === 0) lines.push("_（暂无）_", "");
   for (const item of active) lines.push(...renderItem(item), "");

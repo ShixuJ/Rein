@@ -9,9 +9,16 @@ import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 import { DESTINATIONS } from "../logic/destination.mjs";
+import {
+  commitCommonItems,
+  importFromCommon,
+  promoteToCommon,
+  retireCommonItem,
+  reviseCommonItem
+} from "../logic/common-ledger.mjs";
 import { NO_EVIDENCE_NOTE, renderEvidence } from "../logic/evidence.mjs";
 import { buildLandingForm, readLandingAnswers } from "../logic/landing-form.mjs";
-import { readLedgerState } from "../logic/ledger-state.mjs";
+import { readCommonLedgerState, readLedgerState } from "../logic/ledger-state.mjs";
 import { describeLedger } from "../logic/ledger-text.mjs";
 import {
   addRestatements,
@@ -22,6 +29,7 @@ import {
   markPanelOpen,
   mostRecentProjectRoot,
   readConfig,
+  readCommonEvidence,
   readEvidence,
   readSessionMarker,
   retireAll,
@@ -272,6 +280,109 @@ const TOOLS = [
       additionalProperties: false
     },
     _meta: { ui: { visibility: ["model", "app"] } }
+  },
+
+  // --- 通用账本 -------------------------------------------------------------
+  //
+  // 四个都只对面板可见，**模型碰不到**——包括读。理由：通用账本不在"每轮注入"那条
+  // 链路上，模型看见它也做不了什么，只会多背一份上下文；而"模型不碰通用账本"这条
+  // 要成立，就得在工具面上成立（权限写在工具表里，一眼看得出），不能靠提示词去劝。
+  {
+    name: "rein_common",
+    title: "看通用账本",
+    description:
+      "面板专用，模型不要调。读通用账本（跨项目的那本库），给面板的「通用账本」页签用；带上 evidence 就返回那一条的原文。它不参与每轮注入。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        evidence: {
+          type: "string",
+          description: "要看哪一条的原文，例如 C-004。省略就只读账本本身。"
+        },
+        root: {
+          type: "string",
+          description: "项目根目录的绝对路径（面板上那排标签取它那份配置）。"
+        }
+      },
+      additionalProperties: false
+    },
+    _meta: { ui: { visibility: ["app"] } }
+  },
+  {
+    // 跟项目账本那边的 rein_one 对称：用户非常确定、不想走表单时的快车道。
+    // 区别是写进去**不会每轮带上**——通用账本是库，得自己把它引到某个项目里。
+    name: "rein_common_one",
+    title: "直接写一条进通用账本",
+    description:
+      "面板专用，模型不要调。把一条断言直接写进通用账本，不弹表单。它不参与每轮注入——写进去只是进了那本跨项目的库，要让它生效还得把它引到某个项目里。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        statement: { type: "string", description: "要写进通用账本的那句话。" },
+        type: {
+          type: "string",
+          description: "分类标签；省略时用保留标签「通用账本」。"
+        },
+        root: {
+          type: "string",
+          description: "项目根目录的绝对路径（面板上那排标签取它那份配置）。"
+        }
+      },
+      required: ["statement"],
+      additionalProperties: false
+    },
+    _meta: { ui: { visibility: ["app"] } }
+  },
+  {
+    name: "rein_promote",
+    title: "把一条推到通用账本",
+    description:
+      "面板专用，模型不要调。把本项目的一条复制进通用账本：源那条一个字节都不动，两边各算各的。通用账本里已经有同一句就不重复写。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "要推的已确认项编号，例如 C-013。" },
+        root: { type: "string", description: "项目根目录的绝对路径。" }
+      },
+      required: ["id"],
+      additionalProperties: false
+    },
+    _meta: { ui: { visibility: ["app"] } }
+  },
+  {
+    name: "rein_import",
+    title: "从通用账本引入一条",
+    description:
+      "面板专用，模型不要调。把通用账本里的一条复制进**当前这个项目**的账本：编号在本项目里重新分配，标签换成保留标签「通用账本」。项目里已经有同一句就不重复。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "通用账本里的编号，例如 C-004。" },
+        root: { type: "string", description: "要引到哪个项目：根目录的绝对路径。" }
+      },
+      required: ["id"],
+      additionalProperties: false
+    },
+    _meta: { ui: { visibility: ["app"] } }
+  },
+  {
+    name: "rein_common_edit",
+    title: "改通用账本里的一条",
+    description:
+      "面板专用，模型不要调。改通用账本里的条目：改措辞走取代（旧的留痕、原文跟着走）、只改标签原地改、retire 退休。规矩跟项目账本那边一样——注意退休**不会**影响已经引到项目里的那些副本，它们是复制。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "通用账本里的编号，例如 C-004。" },
+        statement: { type: "string", description: "新的措辞。与旧的不同就会落成一条新条目并取代旧的。" },
+        type: { type: "string", description: "新的标签。只改标签时原地改，不留历史。" },
+        retire: { type: "boolean", description: "true = 退休这条。与 statement 不要同时给。" },
+        root: { type: "string", description: "项目根目录的绝对路径（面板上那排标签取它那份配置）。" }
+      },
+      required: ["id"],
+      additionalProperties: false
+    },
+    _meta: { ui: { visibility: ["app"] } }
   }
 ];
 
@@ -363,6 +474,34 @@ function rootIsExplicit(params) {
 async function ledgerStateFor(params, root) {
   const state = await readLedgerState(root);
   return { ...state, rootSource: rootIsExplicit(params) ? "explicit" : "guessed" };
+}
+
+/** 通用账本那本的状态，形状照 `ledgerStateFor` 来——面板两页用同一套判断根来路的写法。 */
+async function commonStateFor(params, root) {
+  const state = await readCommonLedgerState(root);
+  return { ...state, rootSource: rootIsExplicit(params) ? "explicit" : "guessed" };
+}
+
+/**
+ * 通用账本那边的"改"怎么说。
+ *
+ * 跟项目那套（`describeEdit`）措辞对齐，只有退休这一句必须另说：通用账本退休**不会**
+ * 让已经引到项目里的副本跟着退——那些是复制，两边各算各的。这话不说清，用户会以为
+ * 自己刚把那条从所有项目里拿掉了。
+ */
+function describeCommonEdit(result, types = []) {
+  const label = (slug) => types.find((entry) => entry.slug === slug)?.label ?? slug;
+
+  switch (result.action) {
+    case "superseded":
+      return `通用账本里 ${result.replacedId} 已被 ${result.item.id} 取代——旧的措辞留在账里。`;
+    case "relabelled":
+      return `${result.item.id} 的标签改成「${label(result.item.type)}」。`;
+    case "retired":
+      return `${result.item.id} 在通用账本里退休了。**已经引到项目里的那几份照旧生效**——它们是复制，不跟着变。`;
+    default:
+      return "没有变化。";
+  }
 }
 
 /** 取代与警告这两段在落地之后要出，写一次。 */
@@ -572,6 +711,144 @@ async function callTool(name, params) {
       return {
         content: [{ type: "text", text: `${id} 的原文：\n\n${shown}` }],
         structuredContent: { id, text: shown, hasEvidence: Boolean(text) }
+      };
+    }
+
+    case "rein_common": {
+      const root = resolveRoot(params);
+      const id = String(params?.evidence ?? "").trim();
+
+      // 带了编号就是"面板点了某条的原文"：只回原文、不回账本——跟 rein_evidence 同一个
+      // 形状，面板那边能拿同一段代码接。
+      if (id) {
+        const text = await readCommonEvidence(id);
+        const shown = text ?? NO_EVIDENCE_NOTE;
+
+        return {
+          content: [{ type: "text", text: `${id} 的原文：\n\n${shown}` }],
+          structuredContent: { id, text: shown, hasEvidence: Boolean(text) }
+        };
+      }
+
+      const state = await commonStateFor(params, root);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `通用账本 ${state.active} 条生效、${state.total - state.active} 条已失效。`
+          }
+        ],
+        structuredContent: state
+      };
+    }
+
+    case "rein_common_one": {
+      const root = resolveRoot(params);
+      const statement = String(params?.statement ?? "").trim();
+
+      if (!statement) {
+        throw Object.assign(new Error("要写哪一句？statement 不能为空"), { code: -32602 });
+      }
+
+      const { created } = await commitCommonItems([{ statement, type: params?.type }], {
+        date: localDate(),
+        source: "账本面板 · 直接写",
+        // 这条不是从对话里来的——原文位置注明它是用户本人写的，跟项目账本那边的 rein_one
+        // 用同一句，别留一个说不清的空档。
+        evidence: "用户本人在账本面板直接写入（没有对话原文）。"
+      });
+
+      const state = await commonStateFor(params, root);
+      const message =
+        `已写进通用账本 ${created[0]?.id ?? ""}。` +
+        "**它不会每轮带上**——要让它生效，把它引到某个项目里。";
+
+      return {
+        content: [{ type: "text", text: message }],
+        structuredContent: { ...state, ok: true, message }
+      };
+    }
+
+    case "rein_promote": {
+      const root = resolveRoot(params);
+      const id = String(params?.id ?? "").trim();
+
+      if (!id) {
+        throw Object.assign(new Error("要推哪一条？id 不能为空（例如 C-013）"), { code: -32602 });
+      }
+
+      const result = await promoteToCommon(root, { id, date: localDate() });
+      // 变的是**通用账本**，所以回那本的状态。
+      const state = await commonStateFor(params, root);
+
+      let message;
+      if (!result.ok) {
+        message = `没改动：${result.reason}`;
+      } else if (result.action === "exists") {
+        message = `通用账本里已经有这一条（${result.existing}），没有重复写。`;
+      } else {
+        message = `已推到通用账本 ${result.item.id}。源那条没动——两边各算各的。`;
+      }
+
+      return {
+        content: [{ type: "text", text: message }],
+        structuredContent: { ...state, ok: result.ok, action: result.action ?? null, message }
+      };
+    }
+
+    case "rein_import": {
+      const root = resolveRoot(params);
+      const id = String(params?.id ?? "").trim();
+
+      if (!id) {
+        throw Object.assign(new Error("要引哪一条？id 不能为空（例如 C-004）"), { code: -32602 });
+      }
+
+      const result = await importFromCommon(root, { id, date: localDate() });
+      // 这次变的是**项目**账本，所以回项目那本的状态：面板上等着重画的就是它。
+      const state = await ledgerStateFor(params, root);
+
+      let message;
+      if (!result.ok) {
+        message = `没改动：${result.reason}`;
+      } else if (result.action === "exists") {
+        message = `项目账本里已经有这一条（${result.existing}），没有重复引。`;
+      } else {
+        message = `已引入 ${result.item.id}——从下一轮起每轮带上。`;
+      }
+
+      return {
+        content: [{ type: "text", text: message }],
+        structuredContent: { ...state, ok: result.ok, action: result.action ?? null, message }
+      };
+    }
+
+    case "rein_common_edit": {
+      const root = resolveRoot(params);
+      const id = String(params?.id ?? "").trim();
+
+      if (!id) {
+        throw Object.assign(new Error("要改哪一条？id 不能为空（例如 C-004）"), { code: -32602 });
+      }
+
+      const result =
+        params?.retire === true
+          ? await retireCommonItem({ id })
+          : await reviseCommonItem({
+              id,
+              statement: params?.statement,
+              type: params?.type,
+              date: localDate()
+            });
+
+      const state = await commonStateFor(params, root);
+      const message = result.ok
+        ? describeCommonEdit(result, state.types)
+        : `没改动：${result.reason}`;
+
+      return {
+        content: [{ type: "text", text: message }],
+        structuredContent: { ...state, ok: result.ok, action: result.action ?? null, message }
       };
     }
 

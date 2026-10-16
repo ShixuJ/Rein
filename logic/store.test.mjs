@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,16 +8,20 @@ import test from "node:test";
 import { DEFAULT_MAX_ITEMS, renderHotBlock } from "./hot-block.mjs";
 import { isActive } from "./item.mjs";
 import { parseLedger } from "./ledger.mjs";
+import { COMMON_LABEL } from "./common-ledger.mjs";
 import {
   addRestatements,
   archiveInactive,
   commitItems,
   countArchived,
   ensureScaffold,
+  commonDir,
   localDir,
   markPanelOpen,
   PANEL_OPEN_TTL_MS,
   readEvidence,
+  readCommonEvidence,
+  readCommonItems,
   readConfig,
   readInbox,
   readItems,
@@ -28,6 +32,9 @@ import {
   stateDir,
   takePanelOpen,
   takeRestatements,
+  writeEvidence,
+  writeCommonEvidence,
+  writeCommonLedger,
   writeInbox,
   writeSessionMarker
 } from "./store.mjs";
@@ -801,4 +808,76 @@ test("认不出项目（空 root、相对路径）就别照着空哈希乱建目
 
   assert.ok(!existsSync(join(localDir(""), "ALIGNMENT.md")));
   assert.ok(!existsSync(join(localDir("relative/path"), "ALIGNMENT.md")));
+});
+
+// --- 通用账本 ---------------------------------------------------------------
+
+// 它不属于任何项目，没有 root 可分开（一本账一个固定位置），所以每条用例自己先把账本
+// 清空——用例之间不靠执行顺序。
+const commonLedgerFile = () => join(commonDir(), "ALIGNMENT.md");
+
+test("通用账本：写进去读得回来，文件头是通用那份", async () => {
+  await writeCommonLedger([
+    {
+      id: "C-001",
+      type: "concept-alignment",
+      date: DATE,
+      statement: "通用前提。",
+      source: "来自 Rein · C-003",
+      status: "active"
+    }
+  ]);
+
+  const items = await readCommonItems();
+  assert.equal(items.length, 1);
+  assert.equal(items[0].statement, "通用前提。");
+
+  const text = await readFile(commonLedgerFile(), "utf8");
+  assert.match(text, /^# ALIGNMENT（通用）/, "项目那份的头写的是「这个项目」，别照抄过来");
+  assert.match(text, /### C-001 · concept-alignment/);
+});
+
+test("通用账本没写过时是空的：读它不该顺手把文件铺出来", async () => {
+  await rm(commonLedgerFile(), { force: true });
+
+  assert.deepEqual(await readCommonItems(), []);
+  await assert.rejects(() => stat(commonLedgerFile()), { code: "ENOENT" });
+});
+
+test("原文按账分家：同一个编号，两本账互不串门", async () => {
+  const root = await scratchDir();
+
+  await writeCommonEvidence("C-001", "通用那条的原话。");
+  await writeEvidence(root, "C-001", "项目那条的原话。");
+
+  assert.equal(await readCommonEvidence("C-001"), "通用那条的原话。");
+  assert.equal(await readEvidence(root, "C-001"), "项目那条的原话。");
+
+  // 空文本等于没留——跟项目那边是同一条规则。
+  await writeCommonEvidence("C-001", "   ");
+  assert.equal(await readCommonEvidence("C-001"), null);
+});
+
+test("改一条从通用账本引来的：它变成本项目自己的，标签换成配置里的分类", async () => {
+  const root = await scratchDir();
+  const { created } = await commitItems(root, [{ statement: "引来的那条。", type: COMMON_LABEL }], {
+    date: DATE
+  });
+
+  const result = await reviseItem(root, {
+    id: created[0].id,
+    statement: "改成本项目自己的说法。",
+    type: "concept-alignment",
+    date: DATE
+  });
+
+  assert.equal(result.action, "superseded");
+  assert.equal(result.item.type, "concept-alignment", "新条目带配置里的分类");
+  assert.equal(result.item.statement, "改成本项目自己的说法。");
+
+  const items = await readItems(root);
+  const previous = items.find((item) => item.id === created[0].id);
+  assert.equal(previous.type, COMMON_LABEL, "旧的那条原样留在历史里");
+  assert.equal(previous.status, `superseded by ${result.item.id}`);
+  assert.equal(items.filter(isActive).length, 1, "同一句话不会既旧又新地一起注入");
 });

@@ -1,6 +1,6 @@
 {
   "name": "rein",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Land the conclusions you confirm into an alignment ledger that a hook re-reads on every prompt, so later turns stay aligned. Keeps the main chat clean and makes side chat more useful.",
   "author": {
     "name": "page"
