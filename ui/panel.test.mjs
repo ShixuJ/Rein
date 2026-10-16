@@ -40,10 +40,31 @@ test("面板引用的每个 rein_* 工具都在 server 的工具表里", async (
   }
 });
 
+test("脚本取的每个 id，HTML 里都得有——id 打错在这块是静默的", async () => {
+  const html = await panelSource();
+  const script = scriptOf(html);
+
+  const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]));
+  const asked = [...script.matchAll(/getElementById\("([^"]+)"\)/g)].map((match) => match[1]);
+
+  assert.ok(asked.length > 0, "一个 id 都没取？");
+  for (const id of asked) {
+    assert.ok(ids.has(id), `脚本取了 #${id}，但 HTML 里没有这个 id——它会静静地拿到 null`);
+  }
+});
+
 test("条目按钮叫「修改」；直接写一条会带上标签", async () => {
   const script = scriptOf(await panelSource());
 
   assert.match(script, /button\("修改"/);
   assert.doesNotMatch(script, /button\("改"/);
-  assert.match(script, /call\("rein_one",\s*\{\s*statement,\s*type:/);
+  // 两页各有一条「直接写一条」（项目账本 / 通用账本），两条都得把标签交出去——
+  // 服务端那边标签缺失会兜底，但面板不该指望它兜。
+  for (const name of ["rein_one", "rein_common_one"]) {
+    assert.match(
+      script,
+      new RegExp(`call\\("${name}",\\s*\\{\\s*statement,\\s*type:`),
+      `${name} 那一条没把标签交出去`
+    );
+  }
 });

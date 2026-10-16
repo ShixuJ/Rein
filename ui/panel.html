@@ -147,6 +147,25 @@
       .pick { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
       .pick[hidden] { display: none; }
 
+      /* 两本账：同时只看得见一页。页签只在展开态里——收起时那张小卡片摆不下它。 */
+      .tabs { display: flex; gap: 6px; margin: 0 0 10px; }
+      .tabs button { flex: 1; padding: 6px 8px; }
+      .tabs button.on {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent-text);
+        font-weight: 600;
+      }
+
+      /* "生效中"里的两组小标题：本项目 / 来自通用账本。两组都在时才画——全是自己的条目时，
+         多一个"本项目"只是噪音。 */
+      .group {
+        font-size: var(--t-micro);
+        opacity: 0.7;
+        margin: 12px 0 6px;
+      }
+      .group:first-child { margin-top: 0; }
+
       .item {
         position: relative;
         padding: 12px;
@@ -188,6 +207,13 @@
         border-radius: var(--r-pill);
         background: var(--fill);
         opacity: 0.85;
+      }
+      /* 从通用账本引来的那条：类型那一格换成蓝色系，扫一眼就分得出。它说的是跟旁边那个
+         分组小标题同一件事——这条不属这里。 */
+      .meta .type.foreign {
+        background: var(--accent-soft);
+        color: var(--accent-text);
+        opacity: 1;
       }
       .meta .date {
         /* 日期推到最右：几张卡的日期对齐成一竖条，扫起来才不用跟着标签跑。 */
@@ -484,40 +510,75 @@
     <!-- 整份账本只在展开时渲染，收起时只留一张小卡片：历史消息会被宿主重新挂载，
          收起态若也画整份账本，上滑翻记录就会一路铺开一大块。 -->
     <div id="full">
-      <p class="aside alert" id="hookNote" hidden></p>
-      <section>
-        <div class="head">
-          <h2>生效中 <span class="n" id="activeCount"></span></h2>
-          <button class="add" id="addOne" title="直接写一条（跳过表单）" aria-label="直接写一条">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 5v14M5 12h14"></path>
-            </svg>
-          </button>
-          <button class="danger tiny" id="retireAll" hidden>全部退休</button>
-        </div>
-        <div class="bulk" id="writeOne" hidden></div>
-        <div class="bulk" id="bulk" hidden></div>
-        <p class="aside" id="dropped" hidden></p>
-        <div id="active"></div>
-      </section>
+      <div class="tabs" id="tabs">
+        <button id="tabProject" class="on">本项目</button>
+        <button id="tabCommon">通用账本</button>
+      </div>
 
-      <section id="inactiveSection" hidden>
-        <div class="head">
-          <h2>已失效 <span class="n" id="inactiveCount"></span></h2>
-          <button class="tiny" id="archiveAll" hidden>归档失效</button>
-        </div>
-        <div class="bulk" id="bulkInactive" hidden></div>
-        <div id="inactive"></div>
-      </section>
+      <div id="projectPage">
+        <p class="aside alert" id="hookNote" hidden></p>
+        <section>
+          <div class="head">
+            <h2>生效中 <span class="n" id="activeCount"></span></h2>
+            <button class="add" id="addOne" title="直接写一条（跳过表单）" aria-label="直接写一条">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14"></path>
+              </svg>
+            </button>
+            <button class="danger tiny" id="retireAll" hidden>全部退休</button>
+          </div>
+          <div class="bulk" id="writeOne" hidden></div>
+          <div class="bulk" id="bulk" hidden></div>
+          <p class="aside" id="dropped" hidden></p>
+          <div id="active"></div>
+        </section>
 
-      <p class="aside" id="archiveNote" hidden></p>
+        <section id="inactiveSection" hidden>
+          <div class="head">
+            <h2>已失效 <span class="n" id="inactiveCount"></span></h2>
+            <button class="tiny" id="archiveAll" hidden>归档失效</button>
+          </div>
+          <div class="bulk" id="bulkInactive" hidden></div>
+          <div id="inactive"></div>
+        </section>
+
+        <p class="aside" id="archiveNote" hidden></p>
+
+        <p class="hint">
+          这里改的是<strong>已经落下的</strong>条目。新条目走对话里的原生表单（<code>rein_land</code>），不从这个面板落地。
+        </p>
+      </div>
+
+      <div id="commonPage" hidden>
+        <section>
+          <div class="head">
+            <h2>通用账本 <span class="n" id="commonCount"></span></h2>
+            <button class="add" id="addCommon" title="直接写一条（跳过表单）" aria-label="直接写一条">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="bulk" id="commonWriteOne" hidden></div>
+          <div id="commonActive"></div>
+        </section>
+
+        <section id="commonInactiveSection" hidden>
+          <div class="head">
+            <h2>已失效 <span class="n" id="commonInactiveCount"></span></h2>
+          </div>
+          <div id="commonInactive"></div>
+        </section>
+
+        <p class="hint">
+          这本账<strong>不参与每轮注入</strong>。要让它生效，把一条<strong>引到某个项目里</strong>——
+          引过去的是副本，两边各自独立：这里改了或者退休了，已经引出去的都不会跟着变。
+        </p>
+      </div>
 
       <div class="result" id="result"></div>
-
-      <p class="hint">
-        这里改的是<strong>已经落下的</strong>条目。新条目走对话里的原生表单（<code>rein_land</code>），不从这个面板落地。
-      </p>
     </div>
 
     <script>
@@ -546,9 +607,23 @@
         const retireAllEl = document.getElementById("retireAll");
         const archiveAllEl = document.getElementById("archiveAll");
         const resultEl = document.getElementById("result");
+        const tabProjectEl = document.getElementById("tabProject");
+        const tabCommonEl = document.getElementById("tabCommon");
+        const projectPageEl = document.getElementById("projectPage");
+        const commonPageEl = document.getElementById("commonPage");
+        const commonEl = document.getElementById("commonActive");
+        const commonInactiveEl = document.getElementById("commonInactive");
+        const commonInactiveSection = document.getElementById("commonInactiveSection");
+        const commonCountEl = document.getElementById("commonCount");
+        const commonInactiveCountEl = document.getElementById("commonInactiveCount");
+        const commonWriteOneEl = document.getElementById("commonWriteOne");
+        const addCommonEl = document.getElementById("addCommon");
 
         let nextId = 1;
         let hostReady = false;
+        // 现在看的是哪一页。两页共用一套"编辑 / 确认 / 写作"状态——同时只看得见一页，
+        // 换页时把它们清掉就行（见 switchPage），不必给每页各养一份。
+        let page = "project";
         // 项目根有三种来路，面板得分开对待：
         // - 工具显式给的（模型按你所在的项目打开）→ 认死，刷新也只刷那一本；
         // - 你在这个面板里手选的 → 也认死（就是你要看它）；
@@ -570,11 +645,16 @@
         // 账本状态里**不带**这些——状态是给模型看的，原文是给用户看的，点开才去问。
         const evidenceText = new Map();
         const evidenceOpen = new Set();
+        // 通用账本那一份：条目单独放（形状不一样，没有热块/归档/钩子），原文也单独缓存——
+        // 两本账的编号会撞（都是 C-001），共用一张表就串了。
+        const commonLedger = { items: [], active: 0, total: 0 };
+        const commonEvidenceText = new Map();
+        const commonEvidenceOpen = new Set();
         // 正在等"确认退休"的那条编号。null = 没有在等。
         let confirming = null;
         let displayMode = "inline";
         const pending = new Map();
-        const state = { root: null, items: [], types: [], active: 0, total: 0 };
+        const state = { root: null, items: [], types: [], commonLabel: "", active: 0, total: 0 };
 
         function request(method, params) {
           const id = nextId++;
@@ -590,8 +670,30 @@
           return state.types.find((type) => type.slug === slug)?.label ?? slug;
         }
 
+        // 原文按页分家：两本账的编号会撞（都是 C-001），共用一张表就串了。
+        const evidenceOpenFor = (which) => (which === "common" ? commonEvidenceOpen : evidenceOpen);
+        const evidenceTextFor = (which) => (which === "common" ? commonEvidenceText : evidenceText);
+
         function isActive(item) {
           return item.status === "active";
+        }
+
+        /**
+         * 这条是从通用账本引来的吗？看那个保留标签。
+         *
+         * 标签由 server 随状态一起递过来（state.commonLabel），面板不自己写死"通用账本"
+         * 三个字——那句话的真源只有一处，面板再抄一份，改说法时就会漏。
+         */
+        function fromCommon(item) {
+          return Boolean(state.commonLabel) && item.type === state.commonLabel;
+        }
+
+        /** "生效中"里的分组小标题。 */
+        function groupHead(text) {
+          const el = document.createElement("p");
+          el.className = "group";
+          el.textContent = text;
+          return el;
         }
 
         /** 状态那一栏写给用户看：取代的有链，退休的就一个字。 */
@@ -633,13 +735,14 @@
           return meta;
         }
 
-        function renderActiveItem(item) {
+        function renderActiveItem(item, page) {
           const card = document.createElement("article");
           card.className = editing?.id === item.id ? "item editing" : "item";
 
           const meta = metaRow([
             ["id", item.id],
-            ["type", labelOf(item.type)],
+            // 项目页上，从通用账本引来的那条把类型那格标出来——扫一眼就分得出。
+            [page === "project" && fromCommon(item) ? "type foreign" : "type", labelOf(item.type)],
             ["date", item.date]
           ]);
 
@@ -665,7 +768,11 @@
 
             const actions = document.createElement("div");
             actions.className = "actions";
-            const supersede = button("取代", () => save(item, editing.statement, editing.type), !hostReady);
+            const supersede = button(
+              "取代",
+              () => saveItem(item, page, editing.statement, editing.type),
+              !hostReady
+            );
             supersede.className = "primary";
             actions.append(
               supersede,
@@ -689,11 +796,14 @@
           if (confirming === item.id) {
             const warn = document.createElement("p");
             warn.className = "warn";
-            warn.textContent = "退休不可逆：这条不再每轮注入，它会留在账本的历史里。";
+            warn.textContent =
+              page === "common"
+                ? "退休不可逆：这条在通用账本里不再生效，条目留在账里。已经引到项目里的那几份是副本，不受影响——要一起收，得去那几个项目里各退一次。"
+                : "退休不可逆：这条不再每轮注入，它会留在账本的历史里。";
 
             const confirmActions = document.createElement("div");
             confirmActions.className = "actions";
-            const yes = button("确认退休", () => retireItem(item), !hostReady);
+            const yes = button("确认退休", () => retireItem(item, page), !hostReady);
             yes.className = "danger armed";
             confirmActions.append(
               yes,
@@ -709,13 +819,50 @@
 
           const actions = document.createElement("div");
           actions.className = "actions";
-          const retire = button("退休", () => {
-            confirming = item.id;
-            setResult("");
-            render();
-          }, !hostReady);
-          retire.className = "danger";
 
+          if (page === "common") {
+            // 「引入」不多给一颗实心：面板里实心留给"就这么定"（表单的提交），
+            // 一列卡片站满蓝块，重点反而没了。蓝色的那颗仍然是最常按的「修改」。
+            actions.append(
+              button("引入到本项目", () => importItem(item), !hostReady),
+              editButton(item),
+              retireButton(item)
+            );
+          } else if (fromCommon(item)) {
+            // 引来的那条在项目页是只读的：措辞归通用账本管。就地改本地这份会让它跟源头分家，
+            // 分家之后"这条是通用的"就成了假话。要改就过去改——那边改完，这条是另一条了，
+            // 得重新引（这也是复制模型的代价，写在面上比藏起来强）。
+            actions.append(button("去通用账本改", () => switchPage("common"), !hostReady));
+          } else {
+            actions.append(
+              editButton(item),
+              retireButton(item),
+              button("推到通用账本", () => promoteItem(item), !hostReady)
+            );
+          }
+
+          // 原文：这条结论当初从哪来的。每条都给入口——没有原文的（手写的、更早落的）点开会
+          // 说明它是"外部写入"，而不是留一块空白。
+          const open = evidenceOpenFor(page);
+          const cache = evidenceTextFor(page);
+          const origin = button(open.has(item.id) ? "收起原文" : "原文", () => {
+            toggleEvidence(page, item.id);
+          }, !hostReady);
+          origin.className = "tiny end";
+          actions.append(origin);
+
+          card.append(meta, statement);
+          if (open.has(item.id) && cache.has(item.id)) {
+            const origin = document.createElement("p");
+            origin.className = "origin";
+            origin.textContent = cache.get(item.id);
+            card.append(origin);
+          }
+          card.append(actions);
+          return card;
+        }
+
+        function editButton(item) {
           const edit = button("修改", () => {
             editing = { id: item.id, statement: item.statement, type: item.type };
             confirming = null;
@@ -723,26 +870,17 @@
             render();
           }, !hostReady);
           edit.className = "edit";
+          return edit;
+        }
 
-          actions.append(edit, retire);
-
-          // 原文：这条结论当初从哪来的。每条都给入口——没有原文的（手写的、更早落的）点开会
-          // 说明它是"外部写入"，而不是留一块空白。
-          const origin = button(evidenceOpen.has(item.id) ? "收起原文" : "原文", () => {
-            toggleEvidence(item.id);
+        function retireButton(item) {
+          const retire = button("退休", () => {
+            confirming = item.id;
+            setResult("");
+            render();
           }, !hostReady);
-          origin.className = "tiny end";
-          actions.append(origin);
-
-          card.append(meta, statement);
-          if (evidenceOpen.has(item.id) && evidenceText.has(item.id)) {
-            const origin = document.createElement("p");
-            origin.className = "origin";
-            origin.textContent = evidenceText.get(item.id);
-            card.append(origin);
-          }
-          card.append(actions);
-          return card;
+          retire.className = "danger";
+          return retire;
         }
 
         function renderInactiveItem(item) {
@@ -765,8 +903,8 @@
           return card;
         }
 
-        /** 空状态不是留白：说清这里会长出什么。 */
-        function emptyState() {
+        /** 空状态不是留白：说清这里会长出什么。两页各说各的，所以文案是参数。 */
+        function emptyState(titleText, subText) {
           const wrap = document.createElement("div");
           wrap.className = "empty";
 
@@ -795,11 +933,11 @@
 
           const title = document.createElement("p");
           title.className = "t";
-          title.textContent = "还没有生效的已确认项";
+          title.textContent = titleText;
 
           const sub = document.createElement("p");
           sub.className = "s";
-          sub.textContent = "对话里落地的条目会出现在这里。";
+          sub.textContent = subText;
 
           wrap.append(svg, title, sub);
           return wrap;
@@ -828,6 +966,20 @@
         }
 
         function render() {
+          renderTabs();
+          if (page === "common") renderCommonPage();
+          else renderProjectPage();
+        }
+
+        /** 两页的显示与隐藏。收起态看不见页签——整块 #full 都被藏了。 */
+        function renderTabs() {
+          tabProjectEl.classList.toggle("on", page === "project");
+          tabCommonEl.classList.toggle("on", page === "common");
+          projectPageEl.hidden = page !== "project";
+          commonPageEl.hidden = page !== "common";
+        }
+
+        function renderProjectPage() {
           const active = state.items.filter(isActive).reverse();
           const inactive = state.items.filter((item) => !isActive(item)).reverse();
 
@@ -835,10 +987,22 @@
           activeEl.textContent = "";
           inactiveEl.textContent = "";
 
+          // "生效中"分两组：本项目的、从通用账本引来的。两组都在时才写小标题——
+          // 没有引来的条目时，多一个"本项目"只是噪音。
+          const mine = active.filter((item) => !fromCommon(item));
+          const borrowed = active.filter(fromCommon);
+
           if (active.length === 0) {
-            activeEl.append(emptyState());
+            activeEl.append(emptyState("还没有生效的已确认项", "对话里落地的条目会出现在这里。"));
           } else {
-            for (const item of active) activeEl.append(renderActiveItem(item));
+            if (mine.length > 0) {
+              if (borrowed.length > 0) activeEl.append(groupHead("本项目"));
+              for (const item of mine) activeEl.append(renderActiveItem(item, "project"));
+            }
+            if (borrowed.length > 0) {
+              activeEl.append(groupHead("来自通用账本"));
+              for (const item of borrowed) activeEl.append(renderActiveItem(item, "project"));
+            }
           }
 
           inactiveSection.hidden = inactive.length === 0;
@@ -848,10 +1012,37 @@
             activeCountEl.textContent = String(active.length);
             inactiveCountEl.textContent = inactive.length === 0 ? "" : String(inactive.length);
           }
-          renderBulk(active.length);
+          renderBulk(active.length, borrowed.length);
           renderBulkInactive(inactive.length);
-          renderWriteOne();
+          renderWriteForm("project");
           renderCounts();
+        }
+
+        function renderCommonPage() {
+          const active = commonLedger.items.filter(isActive).reverse();
+          const inactive = commonLedger.items.filter((item) => !isActive(item)).reverse();
+
+          showWhere();
+          commonEl.textContent = "";
+          commonInactiveEl.textContent = "";
+
+          if (active.length === 0) {
+            commonEl.append(
+              emptyState("通用账本还是空的", "在这里直接写一条，或者把某个项目里的一条推上来。")
+            );
+          } else {
+            for (const item of active) commonEl.append(renderActiveItem(item, "common"));
+          }
+
+          commonInactiveSection.hidden = inactive.length === 0;
+          for (const item of inactive) commonInactiveEl.append(renderInactiveItem(item));
+
+          if (hostReady) {
+            commonCountEl.textContent = String(active.length);
+            commonInactiveCountEl.textContent =
+              inactive.length === 0 ? "" : String(inactive.length);
+          }
+          renderWriteForm("common");
         }
 
         /** 侧栏只在两处开：刚打开那一次的认领，以及用户点「在侧边打开」。 */
@@ -941,17 +1132,40 @@
           droppedEl.hidden = false;
         }
 
-        /** 工具回传的 structuredContent 就是完整账本，直接照着重渲染。 */
+        /**
+         * 工具回传的 structuredContent 就是完整账本，直接照着重渲染。
+         *
+         * 两本账的 payload 长得像，靠 `book` 分：通用那本只有条目与计数，热块、归档、
+         * 钩子三样都只属于项目账本——它们讲的是"这个项目每轮注入什么"。
+         */
         function applyState(payload) {
           if (!payload) return;
           if (payload.root) state.root = payload.root;
           // 根是哪来的，server 会说：显式给的才认死，猜的允许刷新时重新认。
           if (typeof payload.rootSource === "string") rootFromTool = payload.rootSource === "explicit";
+          if (Array.isArray(payload.types)) state.types = payload.types;
+          if (typeof payload.commonLabel === "string") state.commonLabel = payload.commonLabel;
+
+          if (payload.book === "common") {
+            if (Array.isArray(payload.items)) commonLedger.items = payload.items;
+            commonLedger.active = payload.active ?? 0;
+            commonLedger.total = payload.total ?? commonLedger.items.length;
+            // 账本一变，原文的展开与缓存就作废（取代之后编号都换了）。
+            commonEvidenceText.clear();
+            commonEvidenceOpen.clear();
+            editing = null;
+            confirming = null;
+            render();
+
+            if (typeof payload.message === "string" && payload.message) {
+              setResult(payload.message);
+            }
+            return;
+          }
+
           if (Array.isArray(payload.items)) state.items = payload.items;
-          // 账本一变，原文的展开与缓存就作废（取代之后编号都换了）。
           evidenceText.clear();
           evidenceOpen.clear();
-          if (Array.isArray(payload.types)) state.types = payload.types;
           if (payload.hotBlock) showHotBlockNote(payload.hotBlock);
           if (payload.archived) renderArchiveNote(payload.archived);
           showHookNote(payload.hook);
@@ -975,29 +1189,38 @@
          *
          * 原文只存在本地、账本里没有，所以点开才现读——不塞进每次状态里，账本再大也不拖。
          * 没有原文时服务端会回一句「外部写入」的说明，照原样显示；只有真的读失败才收回去。
+         *
+         * 两本账各调各的读法：项目那边是 `rein_evidence`（带 id），通用那边是 `rein_common`
+         * 带 `evidence`。**不走 call()**——那段会 applyState，而这是一次纯粹的读。
          */
-        async function toggleEvidence(id) {
-          if (evidenceOpen.has(id)) {
-            evidenceOpen.delete(id);
+        async function toggleEvidence(which, id) {
+          const open = evidenceOpenFor(which);
+          const cache = evidenceTextFor(which);
+
+          if (open.has(id)) {
+            open.delete(id);
             render();
             return;
           }
-          evidenceOpen.add(id);
+          open.add(id);
 
-          if (!evidenceText.has(id)) {
+          if (!cache.has(id)) {
             setResult("正在读原文…");
             const response = await request("tools/call", {
-              name: "rein_evidence",
-              arguments: { id, root: state.root }
+              name: which === "common" ? "rein_common" : "rein_evidence",
+              arguments:
+                which === "common"
+                  ? { evidence: id, root: state.root }
+                  : { id, root: state.root }
             });
             const text = response?.result?.structuredContent?.text ?? null;
             if (response?.error || !text) {
-              evidenceOpen.delete(id);
+              open.delete(id);
               setResult(`失败：${response?.error?.message ?? "没拿到原文。"}`, true);
               render();
               return;
             }
-            evidenceText.set(id, text);
+            cache.set(id, text);
             setResult("");
           }
           render();
@@ -1028,9 +1251,31 @@
          * 是从侧栏入口打开的（没人给根）就重新认一次——不然你切了项目，它还停在上一个。
          */
         function refresh() {
+          // 通用那本不认项目根：它一本账一个固定位置，切过去就现读一次。
+          if (page === "common") return call("rein_common", {});
           // 认死的那种（工具给的、或者你手选的）就刷那一本；猜的重新认一次。
           if (rootFromTool || manualRoot) return call("rein_list", {});
           return call("rein_list", {}, { dropRoot: true });
+        }
+
+        /**
+         * 换页。
+         *
+         * 手上那点临时状态（编辑、确认退休、正在写的那段字）只对原来那页有意义，换页清掉。
+         * 换完立刻读一次新那页——通用账本不跟着项目变，切过去要现取；项目那本也一样
+         * （你可能在对话里改过它）。
+         */
+        function switchPage(next) {
+          if (page === next) return;
+          page = next;
+          editing = null;
+          confirming = null;
+          writing = false;
+          writingText = "";
+          projectsEl.hidden = true;
+          setResult("");
+          render();
+          refresh();
         }
 
         /** 猜不准时的手动切换：把最近提问过的项目摆出来，点一个就看它。 */
@@ -1054,14 +1299,34 @@
           projectsEl.hidden = false;
         }
 
-        async function save(item, statement, type) {
+        // 改与退休两页各有一套工具（rein_edit / rein_common_edit），规矩一样、账本不一样。
+        async function saveItem(item, which, statement, type) {
           setResult("正在改…");
-          await call("rein_edit", { id: item.id, statement, type });
+          await call(which === "common" ? "rein_common_edit" : "rein_edit", {
+            id: item.id,
+            statement,
+            type
+          });
         }
 
-        async function retireItem(item) {
+        async function retireItem(item, which) {
           setResult("正在退休…");
-          await call("rein_edit", { id: item.id, retire: true });
+          await call(which === "common" ? "rein_common_edit" : "rein_edit", {
+            id: item.id,
+            retire: true
+          });
+        }
+
+        /** 项目里的一条 → 通用账本。回来的状态是通用那本，所以这一页不用重画。 */
+        async function promoteItem(item) {
+          setResult("正在推到通用账本…");
+          await call("rein_promote", { id: item.id });
+        }
+
+        /** 通用账本里的一条 → 当前这个项目。回来的是项目那本的状态，切过去就能看见。 */
+        async function importItem(item) {
+          setResult("正在引入…");
+          await call("rein_import", { id: item.id });
         }
 
         async function retireEverything() {
@@ -1143,15 +1408,23 @@
          * 入口是标题行上那个加号（静态写在 HTML 里），这里只管表单那一块：
          * 表单开着的时候加号收起来，避免两个入口同时站着。
          */
-        function renderWriteOne() {
-          writeOneEl.textContent = "";
-          addOneEl.hidden = !hostReady || writing;
-          writeOneEl.hidden = !hostReady || !writing;
-          if (writeOneEl.hidden) return;
+        function renderWriteForm(which) {
+          const form = which === "common" ? commonWriteOneEl : writeOneEl;
+          const add = which === "common" ? addCommonEl : addOneEl;
+
+          form.textContent = "";
+          add.hidden = !hostReady || writing;
+          form.hidden = !hostReady || !writing;
+          if (form.hidden) return;
 
           const note = document.createElement("p");
           note.className = "note";
-          note.textContent = "跳过表单、直接写进账本，以后每轮都带上。只适合十拿九稳的长期前提，别拿它写命令式的话。";
+          // 这两句必须不一样：在项目页写一条就生效，在通用页写一条**不生效**。
+          // 第一次用的人一定会在这儿搞混。
+          note.textContent =
+            which === "common"
+              ? "跳过表单、直接写进通用账本。它不会每轮带上——要让它生效，还得把它引到某个项目里。"
+              : "跳过表单、直接写进账本，以后每轮都带上。只适合十拿九稳的长期前提，别拿它写命令式的话。";
 
           const box = document.createElement("textarea");
           box.value = writingText;
@@ -1174,7 +1447,11 @@
 
           const actions = document.createElement("div");
           actions.className = "actions";
-          const go = button("写进账本", writeOne, !hostReady);
+          const go = button(
+            which === "common" ? "写进通用账本" : "写进账本",
+            () => writeOne(which),
+            !hostReady
+          );
           go.className = "primary";
           actions.append(
             go,
@@ -1185,10 +1462,10 @@
             })
           );
 
-          writeOneEl.append(note, box, chips, actions);
+          form.append(note, box, chips, actions);
         }
 
-        async function writeOne() {
+        async function writeOne(which) {
           const statement = writingText.trim();
           if (!statement) {
             setResult("先写一句。", true);
@@ -1196,7 +1473,12 @@
           }
 
           setResult("正在写…");
-          const payload = await call("rein_one", { statement, type: writingType });
+          // 两页各调各的：项目那本写进去就生效，通用那本写进去只是入库。
+          const payload =
+            which === "common"
+              ? await call("rein_common_one", { statement, type: writingType })
+              : await call("rein_one", { statement, type: writingType });
+
           if (payload?.ok) {
             writing = false;
             writingText = "";
@@ -1210,7 +1492,7 @@
          * 批量退休是不可逆的，所以和单条一样先要一次确认——`confirming` 用 `*` 当哨兵，
          * 单条用的是条目编号，两者不会撞。确认期间把标题行上那颗收起来，免得连点。
          */
-        function renderBulk(activeCount) {
+        function renderBulk(activeCount, borrowedCount) {
           const ready = hostReady && activeCount > 0;
           retireAllEl.hidden = !ready || confirming === "*";
           bulkEl.textContent = "";
@@ -1219,7 +1501,10 @@
 
           const warn = document.createElement("p");
           warn.className = "warn";
-          warn.textContent = `全部退休不可逆：${activeCount} 条生效项会一起变成「已退休」，热块从下一轮起就空了。条目一条不删，都留在账本里——但没有恢复动作。`;
+          warn.textContent =
+            borrowedCount > 0
+              ? `全部退休不可逆：${activeCount} 条生效项会一起变成「已退休」，热块从下一轮起就空了。其中 ${borrowedCount} 条是从通用账本引来的——退掉的只是本项目这份副本，通用账本里那条不受影响。条目一条不删，但没有恢复动作。`
+              : `全部退休不可逆：${activeCount} 条生效项会一起变成「已退休」，热块从下一轮起就空了。条目一条不删，都留在账本里——但没有恢复动作。`;
 
           const actions = document.createElement("div");
           actions.className = "actions";
@@ -1240,6 +1525,8 @@
         // 待取标记，那等于每次点刷新都重新抢一次侧栏。
         refreshEl.addEventListener("click", () => refresh());
         switchEl.addEventListener("click", () => openProjectPicker());
+        tabProjectEl.addEventListener("click", () => switchPage("project"));
+        tabCommonEl.addEventListener("click", () => switchPage("common"));
 
         // 从侧栏挂着的面板不会因为你切项目就重新挂载，也就不会重新取一次状态。所以
         // 窗口重新可见时补一次——只在侧栏形态下补（对话里那张卡片按原样保持安静）。
@@ -1258,9 +1545,16 @@
 
         expandEl.addEventListener("click", () => requestDisplay("fullscreen"));
 
-        // 标题行上那三颗：加一条、全部退休、归档失效。
+        // 标题行上那几颗：加一条、全部退休、归档失效。
         // 加号直接开表单；后两颗只是把 confirming 点上，确认块交给 render 画。
         addOneEl.addEventListener("click", () => {
+          writing = true;
+          writingType = state.types[0]?.slug ?? "";
+          setResult("");
+          render();
+        });
+
+        addCommonEl.addEventListener("click", () => {
           writing = true;
           writingType = state.types[0]?.slug ?? "";
           setResult("");

@@ -4,7 +4,7 @@
 //
 // 两本账各一个入口：项目那本 `readLedgerState`、跨项目那本 `readCommonLedgerState`。
 
-import { readCommonState } from "./common-ledger.mjs";
+import { COMMON_LABEL, readCommonState } from "./common-ledger.mjs";
 import { listTypes } from "./config.mjs";
 import { DEFAULT_MAX_ITEMS, selectHotBlock } from "./hot-block.mjs";
 import { hookFreshness } from "./hook-status.mjs";
@@ -35,6 +35,9 @@ export async function readLedgerState(root) {
     // 面板要用时自己点开去 rein_evidence 取——模型不会因此背上原文。
     items,
     types: listTypes(config),
+    // 保留标签一起递出去：面板要靠它把"从通用账本引来的"挑出来分到另一组，而这三个字
+    // 只允许有一处真源（common-ledger.mjs）——面板自己抄一份，改说法时就会漏一处。
+    commonLabel: COMMON_LABEL,
     active,
     total: items.length,
     archived: { count: archived },
@@ -58,5 +61,13 @@ export async function readCommonLedgerState(root) {
   const config = await readConfig(root);
   const { items, active, total } = await readCommonState();
 
-  return { root, book: "common", items, types: listTypes(config), active, total };
+  return {
+    root,
+    book: "common",
+    items,
+    types: listTypes(config),
+    commonLabel: COMMON_LABEL,
+    active,
+    total
+  };
 }
