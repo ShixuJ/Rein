@@ -141,6 +141,11 @@
         word-break: break-all;
       }
       .where[hidden] { display: none; }
+      .where #switchProject { margin-left: 6px; }
+
+      /* 项目切换：猜不准时摆出来的选项，横着排。 */
+      .pick { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+      .pick[hidden] { display: none; }
 
       .item {
         position: relative;
@@ -470,7 +475,11 @@
     </header>
 
     <p class="notice" id="notice">正在与宿主握手…</p>
-    <p class="where" id="where" hidden></p>
+    <p class="where" id="where" hidden>
+      <span id="whereName"></span>
+      <button class="tiny" id="switchProject" hidden>切换</button>
+    </p>
+    <div class="pick" id="projects" hidden></div>
 
     <!-- 整份账本只在展开时渲染，收起时只留一张小卡片：历史消息会被宿主重新挂载，
          收起态若也画整份账本，上滑翻记录就会一路铺开一大块。 -->
@@ -515,6 +524,9 @@
       (() => {
         const noticeEl = document.getElementById("notice");
         const whereEl = document.getElementById("where");
+        const whereNameEl = document.getElementById("whereName");
+        const switchEl = document.getElementById("switchProject");
+        const projectsEl = document.getElementById("projects");
         const activeEl = document.getElementById("active");
         const inactiveEl = document.getElementById("inactive");
         const inactiveSection = document.getElementById("inactiveSection");
@@ -537,10 +549,13 @@
 
         let nextId = 1;
         let hostReady = false;
-        // 项目根的两种来路：工具调用递过来的（模型知道你在哪个项目），或者 server 按
-        // "最近一次提问的项目"认出来的（从侧栏入口打开时没人递根）。后者允许重新认——
-        // 否则你切到别的项目再点刷新，它还停在原来那本账上。
-        let rootLocked = false;
+        // 项目根有三种来路，面板得分开对待：
+        // - 工具显式给的（模型按你所在的项目打开）→ 认死，刷新也只刷那一本；
+        // - 你在这个面板里手选的 → 也认死（就是你要看它）；
+        // - server 按"最近一次提问的项目"猜的（从侧栏入口打开时没人递根）→ 允许重新认，
+        //   否则你切到别的项目再点刷新，它还停在原来那本账上。
+        let rootFromTool = false;
+        let manualRoot = null;
         // 面板只在"刚被 rein_open_ledger 打开的那一次"里认领展开侧栏；
         // 认领过的实例不再重复认领（历史回放也不会）。
         let claimed = false;
@@ -795,15 +810,21 @@
           const root = state.root ?? null;
           if (!root) {
             whereEl.hidden = true;
-            whereEl.textContent = "";
+            whereNameEl.textContent = "";
             whereEl.title = "";
+            switchEl.hidden = true;
+            projectsEl.hidden = true;
             return;
           }
 
           const parts = String(root).split("/").filter(Boolean);
-          whereEl.textContent = `项目：${parts[parts.length - 1] ?? root}`;
-          whereEl.title = root;
+          whereNameEl.textContent = `项目：${parts[parts.length - 1] ?? root}`;
+          whereEl.title = rootFromTool
+            ? root
+            : `${root}\n（从侧栏入口打开时按"最近一次提问的项目"认；认错了点右边「切换」）`;
           whereEl.hidden = false;
+          // 工具显式给了根的那一次不给切换（那是模型按你所在的项目打开的）；其余情况给手动开关。
+          switchEl.hidden = rootFromTool;
         }
 
         function render() {
@@ -924,6 +945,8 @@
         function applyState(payload) {
           if (!payload) return;
           if (payload.root) state.root = payload.root;
+          // 根是哪来的，server 会说：显式给的才认死，猜的允许刷新时重新认。
+          if (typeof payload.rootSource === "string") rootFromTool = payload.rootSource === "explicit";
           if (Array.isArray(payload.items)) state.items = payload.items;
           // 账本一变，原文的展开与缓存就作废（取代之后编号都换了）。
           evidenceText.clear();
@@ -1005,7 +1028,30 @@
          * 是从侧栏入口打开的（没人给根）就重新认一次——不然你切了项目，它还停在上一个。
          */
         function refresh() {
-          return call("rein_list", {}, { dropRoot: !rootLocked });
+          // 认死的那种（工具给的、或者你手选的）就刷那一本；猜的重新认一次。
+          if (rootFromTool || manualRoot) return call("rein_list", {});
+          return call("rein_list", {}, { dropRoot: true });
+        }
+
+        /** 猜不准时的手动切换：把最近提问过的项目摆出来，点一个就看它。 */
+        async function openProjectPicker() {
+          const payload = await call("rein_projects", {});
+          const projects = Array.isArray(payload?.projects) ? payload.projects : [];
+
+          projectsEl.textContent = "";
+          for (const entry of projects) {
+            const chip = button(entry.name, () => {
+              // 手选就是"我要看这个"：认死它，直到你再切一次。
+              manualRoot = entry.path;
+              state.root = entry.path;
+              projectsEl.hidden = true;
+              refresh();
+            });
+            chip.className = entry.path === state.root ? "chip on" : "chip";
+            chip.title = entry.path;
+            projectsEl.append(chip);
+          }
+          projectsEl.hidden = false;
         }
 
         async function save(item, statement, type) {
@@ -1193,6 +1239,7 @@
         // 刷新走 rein_list（只读）而不是 rein_open_ledger：后者会放一个新的"可展开"
         // 待取标记，那等于每次点刷新都重新抢一次侧栏。
         refreshEl.addEventListener("click", () => refresh());
+        switchEl.addEventListener("click", () => openProjectPicker());
 
         // 从侧栏挂着的面板不会因为你切项目就重新挂载，也就不会重新取一次状态。所以
         // 窗口重新可见时补一次——只在侧栏形态下补（对话里那张卡片按原样保持安静）。
@@ -1310,8 +1357,8 @@
           // 没等到就不认领侧栏——连项目根都不知道，去抢开一个空面板没有意义。
           const arrived = await waitForState(1200);
           if (arrived) {
-            // 根是工具调用递过来的（模型知道你在哪个项目）：这个面板就认死那个项目。
-            rootLocked = true;
+            // 根认不认死由 state 里的 rootSource 说了算（见 applyState）——宿主打开入口时
+            // 也会替用户调一次工具，那次没有根，不能当成"模型知道你在哪个项目"。
             await claimOpen();
             return;
           }

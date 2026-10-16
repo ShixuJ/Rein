@@ -10,7 +10,8 @@ import test, { after } from "node:test";
 const MARKER_DIR = await mkdtemp(join(tmpdir(), "rein-session-test-"));
 process.env.REIN_SESSION_DIR = MARKER_DIR;
 
-const { mostRecentProjectRoot, readSessionMarker, writeSessionMarker } = await import("./store.mjs");
+const { listRecentProjects, mostRecentProjectRoot, readSessionMarker, writeSessionMarker } =
+  await import("./store.mjs");
 
 /** 每条用例从"一条标记都没有"开始，用例之间不靠执行顺序。 */
 async function clearMarkers() {
@@ -69,4 +70,27 @@ test("标记坏掉、或者没带根：跳过它，别把当前项目带偏", as
   assert.equal(mostRecentProjectRoot(), good);
 
   await rm(good, { recursive: true, force: true });
+});
+
+// 面板的「切换」用的就是这份名单：宿主不告诉 MCP App 你在哪个项目，
+// 猜不准的时候只能把最近提问过的摆出来让人自己点。
+test("最近提问过的项目：新的在前，同一个项目只出现一次", async () => {
+  await clearMarkers();
+
+  const older = await mkdtemp(join(tmpdir(), "rein-older-"));
+  const newer = await mkdtemp(join(tmpdir(), "rein-newer-"));
+
+  await writeSessionMarker(older, { session_id: "o1", at: "2026-01-01T00:00:00.000Z" });
+  await writeSessionMarker(newer, { session_id: "n1", at: "2026-06-01T00:00:00.000Z" });
+  // older 又提问了一次：它排到前面，且不重复出现。
+  await writeSessionMarker(older, { session_id: "o2", at: "2026-09-01T00:00:00.000Z" });
+
+  const list = listRecentProjects();
+  assert.deepEqual(
+    list.map((entry) => entry.path),
+    [older, newer]
+  );
+  assert.equal(list[0].name, older.split("/").filter(Boolean).pop(), "名字取末段，给按钮用");
+  assert.equal(list[0].at, "2026-09-01T00:00:00.000Z");
+  assert.equal(listRecentProjects({ limit: 1 }).length, 1);
 });

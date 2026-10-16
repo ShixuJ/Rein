@@ -37,6 +37,8 @@ const AT = "2026-10-05T10:12:00.000Z";
 
 // 状态目录默认落在 $REIN_HOME，把它指到临时目录，别碰真实的 ~/.codex。
 process.env.REIN_HOME = await mkdtemp(join(tmpdir(), "rein-home-"));
+// 会话标记同理：别把测试用的临时项目写进真机那份名单里（面板的「切换」会照它列）。
+process.env.REIN_SESSION_DIR = await mkdtemp(join(tmpdir(), "rein-session-"));
 
 async function scratchDir() {
   return mkdtemp(join(tmpdir(), "rein-store-"));

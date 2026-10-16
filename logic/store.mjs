@@ -268,20 +268,25 @@ async function moveEvidence(root, fromId, toId, { fallback = null } = {}) {
 
 // $REIN_SESSION_DIR 只给测试用（把标记写到自己的临时目录里，别去动真机上的那份）；
 // 真机上**不要设**——钩子与 MCP server 两边都靠这个默认值对齐。
-const SESSION_DIR =
-  process.env.REIN_SESSION_DIR ||
-  join("/tmp", `rein-session-${typeof process.getuid === "function" ? process.getuid() : "u"}`);
+//
+// 每次现读 env，而不是模块加载时定一次：测试要能先设好再 import，import 顺序不该决定隔离成没成。
+function sessionDir() {
+  return (
+    process.env.REIN_SESSION_DIR ||
+    join("/tmp", `rein-session-${typeof process.getuid === "function" ? process.getuid() : "u"}`)
+  );
+}
 
 function sessionKey(root) {
   return createHash("sha1").update(normalizeRoot(root)).digest("hex").slice(0, 16);
 }
 
 function sessionFile(root) {
-  return join(SESSION_DIR, `${sessionKey(root)}.json`);
+  return join(sessionDir(), `${sessionKey(root)}.json`);
 }
 
 export async function writeSessionMarker(root, payload) {
-  await mkdir(SESSION_DIR, { recursive: true });
+  await mkdir(sessionDir(), { recursive: true });
   // root 也一起写进去：面板从 UI 入口直接打开时没人给它 root（见 mostRecentProjectRoot），
   // 只能从这里取回来。文件名是哈希，反推不回去，所以根必须存在内容里。
   await writeFile(
@@ -314,7 +319,7 @@ export async function readSessionMarker(root) {
 export function mostRecentProjectRoot() {
   let names;
   try {
-    names = readdirSync(SESSION_DIR).filter((name) => name.endsWith(".json"));
+    names = readdirSync(sessionDir()).filter((name) => name.endsWith(".json"));
   } catch {
     return null;
   }
@@ -323,7 +328,7 @@ export function mostRecentProjectRoot() {
   for (const name of names) {
     let marker;
     try {
-      marker = JSON.parse(readFileSync(join(SESSION_DIR, name), "utf8"));
+      marker = JSON.parse(readFileSync(join(sessionDir(), name), "utf8"));
     } catch {
       continue;
     }
@@ -337,6 +342,50 @@ export function mostRecentProjectRoot() {
   }
 
   return best?.root ?? null;
+}
+
+/**
+ * 最近提问过的项目，新的在前。
+ *
+ * 给面板的「切换」用：宿主不告诉 MCP App "你现在在哪个项目"，钩子标记只能说明
+ * "最近在哪提过问"。猜不准的时候，把这份名单摆出来让用户自己点——比猜错强。
+ */
+export function listRecentProjects({ limit = 10 } = {}) {
+  let names;
+  try {
+    names = readdirSync(sessionDir()).filter((name) => name.endsWith(".json"));
+  } catch {
+    return [];
+  }
+
+  const seen = new Map();
+  for (const name of names) {
+    let marker;
+    try {
+      marker = JSON.parse(readFileSync(join(sessionDir(), name), "utf8"));
+    } catch {
+      continue;
+    }
+
+    const path = typeof marker?.root === "string" ? normalizeRoot(marker.root) : "";
+    // 已经不在了的项目不进名单：摆出来只会让人点了个空。
+    if (!path || !existsSync(path)) continue;
+
+    const at = Date.parse(marker?.at ?? "");
+    const rank = Number.isFinite(at) ? at : 0;
+    const known = seen.get(path);
+    if (known === undefined || rank > known) seen.set(path, rank);
+  }
+
+  return [...seen]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([path, rank]) => ({
+      path,
+      // 末段当名字；根就是 "/" 这种就退回完整路径。
+      name: path.split("/").filter(Boolean).pop() ?? path,
+      at: rank > 0 ? new Date(rank).toISOString() : null
+    }));
 }
 
 // ---------------------------------------------------------------------------
@@ -354,12 +403,12 @@ export function mostRecentProjectRoot() {
 export const PANEL_OPEN_TTL_MS = 120_000;
 
 function panelOpenFile(root) {
-  return join(SESSION_DIR, `${sessionKey(root)}.open`);
+  return join(sessionDir(), `${sessionKey(root)}.open`);
 }
 
 /** 放一个"下一次面板挂载可以展开"的待取标记。 */
 export async function markPanelOpen(root, { at = Date.now() } = {}) {
-  await mkdir(SESSION_DIR, { recursive: true });
+  await mkdir(sessionDir(), { recursive: true });
   await writeFile(panelOpenFile(root), String(at), "utf8");
 }
 

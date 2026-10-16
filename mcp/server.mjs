@@ -18,6 +18,7 @@ import {
   archiveInactive,
   commitItems,
   ensureScaffold,
+  listRecentProjects,
   markPanelOpen,
   mostRecentProjectRoot,
   readConfig,
@@ -147,6 +148,15 @@ const TOOLS = [
       required: ["candidates", "evidence"],
       additionalProperties: false
     }
+  },
+  {
+    // 只对面板可见：宿主不告诉 MCP App"你现在在哪个项目"，猜不准时把名单摆出来让用户点。
+    name: "rein_projects",
+    title: "最近提问过的项目",
+    description:
+      "面板专用，模型不要调。列出最近提问过的项目（新的在前），给面板那把「切换」用——从侧栏入口打开时，面板只能按最近一次提问的项目认，认不准就得让人自己点。",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    _meta: { ui: { visibility: ["app"] } }
   },
   {
     name: "rein_list",
@@ -337,6 +347,24 @@ function guessedRootNote(params, root) {
   return `（这次没人给项目根，按**最近一次提问的项目**认成了 \`${root}\`——不对就说一声。）`;
 }
 
+/** 这次的项目根是调用方给的，还是我们猜的？ */
+function rootIsExplicit(params) {
+  return Boolean(params?.root) || Boolean(process.env.CODEX_WORKSPACE_ROOT);
+}
+
+/**
+ * 账本状态 + 一句"根是哪来的"。
+ *
+ * `rootSource` 是给面板用的：**入口打开时宿主也会替用户调这个工具，但它没有根**——
+ * 面板要是把"拿到状态"当成"模型知道你在哪个项目"，就会把那个猜来的根钉死，
+ * 之后点刷新也永远停在同一个项目上（就是这么坏过一次）。所以根得标清来路：
+ * 显式给的才认死，猜的允许面板重新认。
+ */
+async function ledgerStateFor(params, root) {
+  const state = await readLedgerState(root);
+  return { ...state, rootSource: rootIsExplicit(params) ? "explicit" : "guessed" };
+}
+
 /** 取代与警告这两段在落地之后要出，写一次。 */
 function linkLines({ replaced = [], warnings = [] }) {
   const lines = [];
@@ -397,7 +425,7 @@ async function callTool(name, params) {
         // 这条不是从对话里来的——原文位置注明它是用户本人写的，别留一个说不清的空档。
         evidence: "用户本人在账本面板直接写入（没有对话原文）。"
       });
-      const state = await readLedgerState(root);
+      const state = await ledgerStateFor(params, root);
       const message = `已写入 ${created[0]?.id ?? ""}——从下一轮起每轮带上。`;
 
       return {
@@ -406,8 +434,23 @@ async function callTool(name, params) {
       };
     }
 
+    case "rein_projects": {
+      const root = resolveRoot(params);
+      const projects = listRecentProjects();
+      const known = new Set(projects.map((entry) => entry.path));
+      // 当前这个可能还没在名单里（手选的、刚建的）——补在第一位。
+      const current = known.has(root)
+        ? []
+        : [{ path: root, name: root.split("/").filter(Boolean).pop() ?? root, at: null }];
+
+      return {
+        content: [{ type: "text", text: `最近提问过的项目 ${projects.length} 个。` }],
+        structuredContent: { root, projects: [...current, ...projects] }
+      };
+    }
+
     case "rein_list": {
-      const state = await readLedgerState(resolveRoot(params));
+      const state = await ledgerStateFor(params, resolveRoot(params));
       const body = state.items.length
         ? `${describeLedger(state)}\n${[...state.items].reverse()
             .map((item) => `${item.id} · ${item.type} · ${item.status}：${item.statement}`)
@@ -421,7 +464,7 @@ async function callTool(name, params) {
 
     case "rein_open_ledger": {
       const root = resolveRoot(params);
-      const state = await readLedgerState(root);
+      const state = await ledgerStateFor(params, root);
 
       // 放一个一次性的待取标记：面板挂载后会来取，取到才展开侧栏。
       // 历史回放取不到——所以上滑聊天记录不会把侧栏一次次抢走。
@@ -452,7 +495,7 @@ async function callTool(name, params) {
     case "rein_retire_all": {
       const root = resolveRoot(params);
       const result = await retireAll(root);
-      const state = await readLedgerState(root);
+      const state = await ledgerStateFor(params, root);
       const message =
         result.retired.length === 0
           ? "没有生效项可退休，账本没动。"
@@ -467,7 +510,7 @@ async function callTool(name, params) {
     case "rein_archive": {
       const root = resolveRoot(params);
       const result = await archiveInactive(root);
-      const state = await readLedgerState(root);
+      const state = await ledgerStateFor(params, root);
       const message =
         result.archived.length === 0
           ? "没有失效条目可归档，账本没动。"
@@ -498,7 +541,7 @@ async function callTool(name, params) {
               source: `账本面板 · 取代 ${id}`
             });
 
-      const state = await readLedgerState(root);
+      const state = await ledgerStateFor(params, root);
       const message = result.ok ? describeEdit(result, state.types) : `没改动：${result.reason}`;
       const note = result.ok ? guessedRootNote(params, root) : "";
 
