@@ -260,7 +260,7 @@ export async function reviseCommonItem({ id, statement, type, date, source = "" 
       statement: nextStatement,
       type: nextType ?? target.type,
       date,
-      source: source || `通用账本 · 取代 ${id}`,
+      source: source || `账本面板 · 取代 ${id}`,
       status: "active"
     };
     const after = [...supersede(items, id, fresh), created];
