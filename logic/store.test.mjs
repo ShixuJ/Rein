@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,10 +14,13 @@ import {
   commitItems,
   countArchived,
   ensureScaffold,
+  commonDir,
   localDir,
   markPanelOpen,
   PANEL_OPEN_TTL_MS,
   readEvidence,
+  readCommonEvidence,
+  readCommonItems,
   readConfig,
   readInbox,
   readItems,
@@ -28,6 +31,9 @@ import {
   stateDir,
   takePanelOpen,
   takeRestatements,
+  writeEvidence,
+  writeCommonEvidence,
+  writeCommonLedger,
   writeInbox,
   writeSessionMarker
 } from "./store.mjs";
@@ -801,4 +807,52 @@ test("认不出项目（空 root、相对路径）就别照着空哈希乱建目
 
   assert.ok(!existsSync(join(localDir(""), "ALIGNMENT.md")));
   assert.ok(!existsSync(join(localDir("relative/path"), "ALIGNMENT.md")));
+});
+
+// --- 通用账本 ---------------------------------------------------------------
+
+// 它不属于任何项目，没有 root 可分开（一本账一个固定位置），所以每条用例自己先把账本
+// 清空——用例之间不靠执行顺序。
+const commonLedgerFile = () => join(commonDir(), "ALIGNMENT.md");
+
+test("通用账本：写进去读得回来，文件头是通用那份", async () => {
+  await writeCommonLedger([
+    {
+      id: "C-001",
+      type: "concept-alignment",
+      date: DATE,
+      statement: "通用前提。",
+      source: "来自 Rein · C-003",
+      status: "active"
+    }
+  ]);
+
+  const items = await readCommonItems();
+  assert.equal(items.length, 1);
+  assert.equal(items[0].statement, "通用前提。");
+
+  const text = await readFile(commonLedgerFile(), "utf8");
+  assert.match(text, /^# ALIGNMENT（通用）/, "项目那份的头写的是「这个项目」，别照抄过来");
+  assert.match(text, /### C-001 · concept-alignment/);
+});
+
+test("通用账本没写过时是空的：读它不该顺手把文件铺出来", async () => {
+  await rm(commonLedgerFile(), { force: true });
+
+  assert.deepEqual(await readCommonItems(), []);
+  await assert.rejects(() => stat(commonLedgerFile()), { code: "ENOENT" });
+});
+
+test("原文按账分家：同一个编号，两本账互不串门", async () => {
+  const root = await scratchDir();
+
+  await writeCommonEvidence("C-001", "通用那条的原话。");
+  await writeEvidence(root, "C-001", "项目那条的原话。");
+
+  assert.equal(await readCommonEvidence("C-001"), "通用那条的原话。");
+  assert.equal(await readEvidence(root, "C-001"), "项目那条的原话。");
+
+  // 空文本等于没留——跟项目那边是同一条规则。
+  await writeCommonEvidence("C-001", "   ");
+  assert.equal(await readCommonEvidence("C-001"), null);
 });

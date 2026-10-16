@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseLedger, serializeLedger } from "./ledger.mjs";
+import { LEDGER_HEADERS, parseLedger, serializeLedger } from "./ledger.mjs";
 
 const ITEMS = [
   {
@@ -52,4 +52,15 @@ test("空账本也能解析，并且写出占位而不是空白", () => {
 test("断言里的全角冒号不会截断字段", () => {
   const tricky = [{ ...ITEMS[0], statement: "命名规则：中文给人看，slug 给代码用。" }];
   assert.deepEqual(parseLedger(serializeLedger(tricky)), tricky);
+});
+
+test("换个文件头：只有头变了，条目形状没动", () => {
+  const text = serializeLedger(ITEMS, { header: LEDGER_HEADERS.common });
+
+  assert.match(text, /^# ALIGNMENT（通用）/);
+  assert.deepEqual(parseLedger(text), ITEMS, "解析只认条目那几行，头随便换");
+});
+
+test("不传文件头就是项目那份——默认这条路一个字节都不变", () => {
+  assert.equal(serializeLedger(ITEMS), serializeLedger(ITEMS, { header: LEDGER_HEADERS.project }));
 });

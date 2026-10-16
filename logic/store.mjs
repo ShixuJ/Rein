@@ -30,7 +30,13 @@ import {
   successorOf,
   supersede
 } from "./item.mjs";
-import { orderById, parseLedger, serializeArchive, serializeLedger } from "./ledger.mjs";
+import {
+  LEDGER_HEADERS,
+  orderById,
+  parseLedger,
+  serializeArchive,
+  serializeLedger
+} from "./ledger.mjs";
 
 export const LEDGER_FILENAME = "ALIGNMENT.md";
 export const ARCHIVE_FILENAME = "ALIGNMENT-ARCHIVE.md";
@@ -87,6 +93,16 @@ export function stateDir(root) {
   return localDir(base);
 }
 
+/**
+ * **通用账本**的目录：`$REIN_HOME/common/`。
+ *
+ * 它不属于任何项目，所以没有 root 可算哈希——一本账一个固定位置，跟 `projects/<哈希>/`
+ * 平级。条目、原文都在这一层下面，跟项目账本用同一套文件名与形状。
+ */
+export function commonDir() {
+  return join(reinHome(), "common");
+}
+
 export async function readConfig(root) {
   const base = normalizeRoot(root);
   // 配置是**人写**的（不会被自动创建）。两处都认，先项目、后本地：
@@ -106,6 +122,29 @@ export async function readConfig(root) {
 export async function readItems(root) {
   const text = await readIfExists(join(stateDir(root), LEDGER_FILENAME));
   return text ? parseLedger(text) : [];
+}
+
+/**
+ * 通用账本里的条目。文件不在就是空的——**"没有通用账本"是一种正常状态**，
+ * 不是错误，也不能顺手给它铺一个空壳（铺了就等于宣称你有这本账了）。
+ */
+export async function readCommonItems() {
+  const text = await readIfExists(join(commonDir(), LEDGER_FILENAME));
+  return text ? parseLedger(text) : [];
+}
+
+/**
+ * 覆盖整本通用账本。**只有这一个地方能写它**，读改写都从 common-ledger.mjs 汇到这里，
+ * 跟项目的 writeLedger 一样——区别只在文件头（见 ledger.mjs 的 LEDGER_HEADERS）。
+ */
+export async function writeCommonLedger(items) {
+  const dir = commonDir();
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, LEDGER_FILENAME),
+    serializeLedger(items, { header: LEDGER_HEADERS.common }),
+    "utf8"
+  );
 }
 
 /**
@@ -206,32 +245,61 @@ export async function takeRestatements(root, { session = "", isMain } = {}) {
 // 为什么必须在**落地那一刻**留：侧聊是临时的、没有 rollout 文件，一段在侧聊里谈成的结论，
 // 它的原文在侧聊关掉之后就查不到了。事后没有源可回溯，只能由模型在调 rein_land 时交出来。
 //
-// 只留机器本地（`$REIN_HOME/projects/<hash>/evidence/`），**不进账本、不进项目**：账本要能
-// 进 PR、要能跨机器，而原文是本地审计用的旁证。条目的编号就是指针——面板按编号现读现显。
+// 只留机器本地（`$REIN_HOME/.../evidence/`），**不进账本、不进项目**：账本要能进 PR、
+// 要能跨机器，而原文是本地审计用的旁证。条目的编号就是指针——面板按编号现读现显。
 //
 // 生命周期跟着结论走：**取代 → 原文跟着新条目走**（"改措辞不改原文"）；**退休 → 一起退休**。
+//
+// 原文按"哪本账"分目录：项目账本是 `localDir(root)/evidence/`（按项目哈希分），
+// 通用账本是 `commonDir()/evidence/`。中间那组 dir 版是同一套写法，两组出口各自挑
+// 自己的目录——两本账的原文互不串门，编号也各算各的。
 
-function evidenceFile(root, id) {
-  return join(localDir(root), EVIDENCE_DIR, `${id}.md`);
+function evidenceFile(dir, id) {
+  return join(dir, EVIDENCE_DIR, `${id}.md`);
 }
 
 /** 留一份原文。空文本等于没留——顺手把旧的那份摘掉。 */
-export async function writeEvidence(root, id, text) {
+async function writeEvidenceAt(dir, id, text) {
   const value = String(text ?? "").trim();
-  if (!value) return deleteEvidence(root, id);
+  if (!value) return deleteEvidenceAt(dir, id);
 
-  const file = evidenceFile(root, id);
+  const file = evidenceFile(dir, id);
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, `${value}\n`, "utf8");
 }
 
-export async function readEvidence(root, id) {
-  const text = await readIfExists(evidenceFile(root, id));
+async function readEvidenceAt(dir, id) {
+  const text = await readIfExists(evidenceFile(dir, id));
   return text && text.trim() ? text.trim() : null;
 }
 
+async function deleteEvidenceAt(dir, id) {
+  await rm(evidenceFile(dir, id), { force: true });
+}
+
+export async function writeEvidence(root, id, text) {
+  await writeEvidenceAt(localDir(root), id, text);
+}
+
+export async function readEvidence(root, id) {
+  return readEvidenceAt(localDir(root), id);
+}
+
 export async function deleteEvidence(root, id) {
-  await rm(evidenceFile(root, id), { force: true });
+  await deleteEvidenceAt(localDir(root), id);
+}
+
+// 通用账本的原文：同一套写法，目录换成通用那一份。
+export async function writeCommonEvidence(id, text) {
+  await writeEvidenceAt(commonDir(), id, text);
+}
+
+export async function readCommonEvidence(id) {
+  return readEvidenceAt(commonDir(), id);
+}
+
+export async function deleteCommonEvidence(id) {
+  await deleteEvidenceAt(commonDir(), id);
 }
 
 /** 往已有原文后面接一行。取代时用：前面几行说"从哪来"，这一行说"改之前是什么"。 */
